@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Secrets — never commit
+.env
+session.json
+
+# Runtime output — regenerated on every run
+runs/
+screenshots/
+
+# Build artifacts
+build/
+dist/
+*.spec.bak
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~
+
+# Logs
+*.log
