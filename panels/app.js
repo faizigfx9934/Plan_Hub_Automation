@@ -144,11 +144,14 @@ function OwnerDashboard({ token }) {
 
 // ---------- Admin view ----------
 function AdminDashboard({ token }) {
+  // All useState hooks must be at the top, before any other logic
   const [tab, setTab] = useState('laptops');
   const [laptops, setLaptops] = useState([]);
   const [quarantine, setQuarantine] = useState([]);
   const [config, setConfig] = useState([]);
   const [err, setErr] = useState('');
+  const [resetStep, setResetStep] = useState(0); // 0=idle 1=confirm 2=resetting
+  const [resetMsg, setResetMsg] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -164,8 +167,6 @@ function AdminDashboard({ token }) {
   useEffect(() => { load(); const t = setInterval(load, 5_000); return () => clearInterval(t); }, [load]);
 
   const paused = config.find((r) => r.key === 'paused')?.value === 'true';
-  const [resetStep, setResetStep] = useState(0); // 0=idle, 1=first confirm, 2=resetting
-  const [resetMsg, setResetMsg] = useState('');
 
   const togglePause = async () => {
     await api(token, '/api/config', { method: 'POST', body: JSON.stringify({ key: 'paused', value: !paused ? 'true' : 'false' }) });
