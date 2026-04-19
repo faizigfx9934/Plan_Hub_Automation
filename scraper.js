@@ -60,9 +60,33 @@ async function login(page) {
   logger.ok('Logged in');
 }
 
+// Checks if the page got redirected to signin (session died mid-run).
+// If so, re-logs in, re-saves the session, and navigates back to where we were.
+// Returns true if a re-login happened, false if session was still valid.
+async function ensureLoggedIn(page, returnUrl = 'https://supplier.planhub.com/project/list') {
+  const url = page.url();
+  const needsLogin = /signin|login|access\.planhub\.com/i.test(url);
+  if (!needsLogin) return false;
+
+  logger.fail('⚠️  Session expired mid-run — re-authenticating');
+  await login(page);
+  await page.context().storageState({ path: 'session.json' });
+  logger.ok('Session refreshed and saved');
+
+  if (returnUrl) {
+    await page.goto(returnUrl, { timeout: 60000, waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(2000);
+  }
+  return true;
+}
+
 async function setDateFilter(page, dayOffset = 0) {
   logger.step(`Setting date filter (today+${dayOffset} → today+${dayOffset + 7})`);
   await page.goto('https://supplier.planhub.com/project/list', { timeout: 60000, waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(1500);
+
+  // If session died, re-login and come back to project/list before continuing
+  await ensureLoggedIn(page);
 
   await page.waitForSelector('text=/search/i', { timeout: 30000 });
   await page.waitForTimeout(2000);
@@ -139,6 +163,15 @@ async function scrapeProject(page, projectName) {
 
   await projectPage.waitForLoadState('domcontentloaded');
   await projectPage.waitForTimeout(3000);
+
+  // If the project tab got kicked to signin, recover on main page and skip this project.
+  // Next iteration of the outer loop will proceed with the refreshed session.
+  if (/signin|login|access\.planhub\.com/i.test(projectPage.url())) {
+    logger.fail('⚠️  Project tab hit signin — re-authenticating, skipping this project');
+    await projectPage.close().catch(() => {});
+    await ensureLoggedIn(page);
+    return [];
+  }
 
   // Extract full project name and bid due date from the project page
   let fullProjectName = projectName;
