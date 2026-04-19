@@ -414,6 +414,7 @@ async function main() {
     await setDateFilter(page, 0); // Start with today → today+7
 
     const allData = [];
+    const quarantine = [];
     let pageNum = 1;
     let dayOffset = 0; // Tracks how many days forward we've shifted
     let totalRanges = 0;
@@ -445,10 +446,35 @@ async function main() {
             break;
           }
 
-          const data = await scrapeProject(page, projectName);
-          allData.push(...data);
-          // Save progress after each project
-          fs.writeFileSync(`${OUTPUT_DIR}/data.json`, JSON.stringify(allData, null, 2));
+          try {
+            const data = await scrapeProject(page, projectName);
+            allData.push(...data);
+            fs.writeFileSync(`${OUTPUT_DIR}/data.json`, JSON.stringify(allData, null, 2));
+          } catch (err) {
+            // One bad project must never kill an 8.5hr run.
+            // Quarantine it, take a diagnostic screenshot, move on.
+            logger.fail(`❌ Project failed: ${projectName} — ${err.message}`);
+            quarantine.push({
+              project: projectName,
+              error: err.message,
+              stack: err.stack,
+              failedAt: new Date().toISOString(),
+              dateRange: `today+${dayOffset} → today+${dayOffset + 7}`,
+            });
+            fs.writeFileSync(`${OUTPUT_DIR}/quarantine.json`, JSON.stringify(quarantine, null, 2));
+            // Diagnostic screenshot of whatever state the main page is in
+            await page.screenshot({
+              path: `${OUTPUT_DIR}/quarantine-${Date.now()}.png`,
+              fullPage: true,
+            }).catch(() => {});
+            // Make sure we're back on project/list with a valid session before next iteration
+            await page.goto('https://supplier.planhub.com/project/list', {
+              timeout: 60000,
+              waitUntil: 'domcontentloaded',
+            }).catch(() => {});
+            await ensureLoggedIn(page);
+            await page.waitForTimeout(2000);
+          }
         }
 
         pageNum++;
@@ -457,10 +483,29 @@ async function main() {
       // After completing this date range, shift forward by 1 day
       dayOffset++;
       logger.info(`🔄 Shifting date window forward to day +${dayOffset}...`);
-      
-      // Set new date filter (will navigate to project list page)
-      await setDateFilter(page, dayOffset);
-      
+
+      // Setting the date filter can fail (PlanHub DOM quirks). Don't let that kill the run —
+      // retry once, and if it still fails, skip this day and try the next.
+      try {
+        await setDateFilter(page, dayOffset);
+      } catch (err) {
+        logger.fail(`⚠️  setDateFilter failed for day +${dayOffset}: ${err.message} — retrying once`);
+        await page.waitForTimeout(3000);
+        try {
+          await setDateFilter(page, dayOffset);
+        } catch (err2) {
+          logger.fail(`❌ setDateFilter failed twice for day +${dayOffset}, skipping this day`);
+          quarantine.push({
+            project: '(date-filter)',
+            error: err2.message,
+            failedAt: new Date().toISOString(),
+            dateRange: `today+${dayOffset} → today+${dayOffset + 7}`,
+          });
+          fs.writeFileSync(`${OUTPUT_DIR}/quarantine.json`, JSON.stringify(quarantine, null, 2));
+          continue;
+        }
+      }
+
       // Small pause between date ranges
       await page.waitForTimeout(3000);
     }
@@ -491,6 +536,11 @@ async function main() {
 
     logger.ok(`DONE — Processed ${totalRanges} date ranges in ${((Date.now() - START_TIME) / 1000 / 60 / 60).toFixed(2)} hours`);
     logger.ok(`Total: ${allData.length} companies (${newCompanies.length} new)`);
+    if (quarantine.length > 0) {
+      logger.fail(`⚠️  ${quarantine.length} project(s) quarantined — see ${OUTPUT_DIR}/quarantine.json`);
+    } else {
+      logger.ok(`✓ Zero failed projects`);
+    }
     logger.info(`Output: ${OUTPUT_DIR}/`);
     logger.info(`📄 data.csv = all companies | new-companies.csv = only new ones`);
   } catch (err) {
