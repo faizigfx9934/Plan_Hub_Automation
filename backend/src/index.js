@@ -16,14 +16,35 @@ const json = (data, status = 200) =>
 const now = () => Date.now();
 
 // ---- Auth helpers ----
-// Writes (from scrapers) use INGEST_TOKEN. Reads (from panels) use READ_TOKEN.
+// Three "roles":
+//   ingest — scrapers posting data      → INGEST_TOKEN
+//   read   — either panel reading data  → OWNER_PASSWORD or ADMIN_PASSWORD
+//   admin  — admin panel writing config → ADMIN_PASSWORD
 function requireToken(request, env, kind) {
   const header = request.headers.get('authorization') || '';
   const token = header.replace(/^Bearer\s+/i, '');
-  const expected = kind === 'ingest' ? env.INGEST_TOKEN : env.READ_TOKEN;
-  if (!expected) return 'server token not configured';
-  if (!token || token !== expected) return 'unauthorized';
-  return null;
+  if (!token) return 'unauthorized';
+
+  if (kind === 'ingest') {
+    if (token && token === env.INGEST_TOKEN) return null;
+  } else if (kind === 'read') {
+    if (env.OWNER_PASSWORD && token === env.OWNER_PASSWORD) return null;
+    if (env.ADMIN_PASSWORD && token === env.ADMIN_PASSWORD) return null;
+  } else if (kind === 'admin') {
+    if (env.ADMIN_PASSWORD && token === env.ADMIN_PASSWORD) return null;
+  }
+  return 'unauthorized';
+}
+
+// Simple role-check endpoint: panel sends its password, we tell it which role it has.
+// Lets the login screen show/hide admin features without embedding passwords in code.
+async function handleWhoAmI(request, env) {
+  const header = request.headers.get('authorization') || '';
+  const token = header.replace(/^Bearer\s+/i, '');
+  if (!token) return json({ role: null }, 200);
+  if (env.ADMIN_PASSWORD && token === env.ADMIN_PASSWORD) return json({ role: 'admin' });
+  if (env.OWNER_PASSWORD && token === env.OWNER_PASSWORD) return json({ role: 'owner' });
+  return json({ role: null }, 200);
 }
 
 // ---- Route handlers ----
@@ -214,7 +235,7 @@ async function handleConfigGet(request, env) {
 }
 
 async function handleConfigSet(request, env) {
-  const err = requireToken(request, env, 'read');
+  const err = requireToken(request, env, 'admin');
   if (err) return json({ error: err }, 401);
   const body = await request.json().catch(() => null);
   if (!body?.key) return json({ error: 'key required' }, 400);
@@ -228,7 +249,7 @@ async function handleConfigSet(request, env) {
 }
 
 async function handleQuarantineResolve(request, env) {
-  const err = requireToken(request, env, 'read');
+  const err = requireToken(request, env, 'admin');
   if (err) return json({ error: err }, 401);
   const body = await request.json().catch(() => null);
   if (!body?.id) return json({ error: 'id required' }, 400);
@@ -258,6 +279,8 @@ export default {
       if (m === 'GET' && p === '/api/config') return handleConfigGet(request, env);
       if (m === 'POST' && p === '/api/config') return handleConfigSet(request, env);
       if (m === 'POST' && p === '/api/quarantine/resolve') return handleQuarantineResolve(request, env);
+
+      if (m === 'GET' && p === '/api/whoami') return handleWhoAmI(request, env);
 
       if (p === '/' || p === '/health') return json({ ok: true, service: 'planhub-telemetry' });
       return json({ error: 'not found', path: p }, 404);
