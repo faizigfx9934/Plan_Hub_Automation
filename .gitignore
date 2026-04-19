@@ -35,3 +35,9 @@ Thumbs.db
 .wrangler/
 .dev.vars
 backend/node_modules/
+
+# Local credential / token notes — never commit
+*Credentials*
+*Tokens*
+*credentials*
+*tokens*
