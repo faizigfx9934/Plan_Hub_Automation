@@ -9,7 +9,7 @@ compatibility_date = "2026-04-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "planhub-telemetry"
-database_id = "PASTE-DATABASE-ID-HERE"
+database_id = "1ba31431-90d9-4953-a3b4-adbfb1be8bde"
 
 # ---- Secrets (set via `wrangler secret put <NAME>`, never committed) ----
 # INGEST_TOKEN  — shared bearer token every laptop sends on write requests
