@@ -6,6 +6,7 @@ import path from 'path';
 import 'dotenv/config';
 import { SEL } from './selectors.js';
 import { logger } from './logger.js';
+import * as telemetry from './telemetry.js';
 
 // Runtime limit: 8.5 hours (in milliseconds)
 const MAX_RUNTIME_MS = 8.5 * 60 * 60 * 1000;
@@ -153,6 +154,7 @@ async function getProjectsOnCurrentPage(page) {
 
 async function scrapeProject(page, projectName) {
   logger.step(`Scraping project: ${projectName}`);
+  telemetry.setCurrentProject(projectName);
 
   const [projectPage] = await Promise.all([
     page.context().waitForEvent('page'),
@@ -301,6 +303,7 @@ async function scrapeProject(page, projectName) {
         });
         
         newCount++;
+        telemetry.incCompanies(1);
         await companyPage.close();
         logger.ok(`✓ ${companyName} - done`);
 
@@ -398,6 +401,9 @@ async function main() {
   const context = await browser.newContext(contextOpts);
   const page = await context.newPage();
 
+  // Declared outside try so finally can always clean it up
+  let stopHeartbeat = () => {};
+
   try {
     if (!fs.existsSync(sessionPath)) {
       await login(page);
@@ -418,6 +424,9 @@ async function main() {
     let pageNum = 1;
     let dayOffset = 0; // Tracks how many days forward we've shifted
     let totalRanges = 0;
+
+    // Start telemetry heartbeat loop (no-op if TELEMETRY_URL / INGEST_TOKEN missing)
+    stopHeartbeat = telemetry.startHeartbeat();
 
     // Continuous loop: keep shifting date window forward until time limit
     while (Date.now() - START_TIME < MAX_RUNTIME_MS) {
@@ -450,18 +459,22 @@ async function main() {
             const data = await scrapeProject(page, projectName);
             allData.push(...data);
             fs.writeFileSync(`${OUTPUT_DIR}/data.json`, JSON.stringify(allData, null, 2));
+            // Upload this project's companies to telemetry backend (best-effort)
+            telemetry.reportCompanies(data);
           } catch (err) {
             // One bad project must never kill an 8.5hr run.
             // Quarantine it, take a diagnostic screenshot, move on.
             logger.fail(`❌ Project failed: ${projectName} — ${err.message}`);
-            quarantine.push({
+            const entry = {
               project: projectName,
               error: err.message,
               stack: err.stack,
               failedAt: new Date().toISOString(),
               dateRange: `today+${dayOffset} → today+${dayOffset + 7}`,
-            });
+            };
+            quarantine.push(entry);
             fs.writeFileSync(`${OUTPUT_DIR}/quarantine.json`, JSON.stringify(quarantine, null, 2));
+            telemetry.reportQuarantine(entry);
             // Diagnostic screenshot of whatever state the main page is in
             await page.screenshot({
               path: `${OUTPUT_DIR}/quarantine-${Date.now()}.png`,
@@ -543,10 +556,20 @@ async function main() {
     }
     logger.info(`Output: ${OUTPUT_DIR}/`);
     logger.info(`📄 data.csv = all companies | new-companies.csv = only new ones`);
+
+    // Final run summary to telemetry backend
+    await telemetry.reportRunComplete({
+      companiesScraped: allData.length,
+      newCompanies: newCompanies.length,
+      dateRanges: totalRanges,
+      quarantined: quarantine.length,
+    });
   } catch (err) {
     logger.fail(`Fatal error: ${err.message}`);
     await page.screenshot({ path: `${OUTPUT_DIR}/fatal-error.png`, fullPage: true });
+    telemetry.setStatus('error');
   } finally {
+    stopHeartbeat();
     await browser.close();
   }
 }
