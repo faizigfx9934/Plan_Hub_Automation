@@ -248,6 +248,25 @@ async function handleConfigSet(request, env) {
   return json({ ok: true });
 }
 
+async function handleReset(request, env) {
+  const err = requireToken(request, env, 'admin');
+  if (err) return json({ error: err }, 401);
+
+  // Wipe all scraped data and run history
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM companies'),
+    env.DB.prepare('DELETE FROM quarantine'),
+    env.DB.prepare('DELETE FROM runs'),
+    env.DB.prepare('DELETE FROM heartbeats'),
+    env.DB.prepare('UPDATE laptops SET status=\'idle\', current_project=NULL, last_error=NULL, companies_today=0'),
+    // Signal every laptop to wipe its local dedup cache on next heartbeat
+    env.DB.prepare(`INSERT INTO config (key, value, updated_at) VALUES ('reset_requested','true',?)
+      ON CONFLICT(key) DO UPDATE SET value='true', updated_at=excluded.updated_at`).bind(now()),
+  ]);
+
+  return json({ ok: true, message: 'Fleet reset. All laptops will clear local cache on next heartbeat.' });
+}
+
 async function handleQuarantineResolve(request, env) {
   const err = requireToken(request, env, 'admin');
   if (err) return json({ error: err }, 401);
@@ -281,6 +300,7 @@ export default {
       if (m === 'POST' && p === '/api/quarantine/resolve') return handleQuarantineResolve(request, env);
 
       if (m === 'GET' && p === '/api/whoami') return handleWhoAmI(request, env);
+      if (m === 'POST' && p === '/api/reset') return handleReset(request, env);
 
       if (p === '/' || p === '/health') return json({ ok: true, service: 'planhub-telemetry' });
       return json({ error: 'not found', path: p }, 404);

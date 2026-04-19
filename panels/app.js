@@ -164,6 +164,9 @@ function AdminDashboard({ token }) {
   useEffect(() => { load(); const t = setInterval(load, 5_000); return () => clearInterval(t); }, [load]);
 
   const paused = config.find((r) => r.key === 'paused')?.value === 'true';
+  const [resetStep, setResetStep] = useState(0); // 0=idle, 1=first confirm, 2=resetting
+  const [resetMsg, setResetMsg] = useState('');
+
   const togglePause = async () => {
     await api(token, '/api/config', { method: 'POST', body: JSON.stringify({ key: 'paused', value: !paused ? 'true' : 'false' }) });
     load();
@@ -171,6 +174,19 @@ function AdminDashboard({ token }) {
 
   const resolveItem = async (id) => {
     await api(token, '/api/quarantine/resolve', { method: 'POST', body: JSON.stringify({ id }) });
+    load();
+  };
+
+  const doReset = async () => {
+    setResetStep(2);
+    setResetMsg('');
+    try {
+      const r = await api(token, '/api/reset', { method: 'POST' });
+      setResetMsg(r.message || 'Reset sent.');
+    } catch (e) {
+      setResetMsg(`Error: ${e.message}`);
+    }
+    setTimeout(() => { setResetStep(0); setResetMsg(''); }, 5000);
     load();
   };
 
@@ -200,6 +216,26 @@ function AdminDashboard({ token }) {
         h('h2', null, 'Backend'),
         h('div', { className: 'stat', style: { fontSize: 16 } }, 'healthy'),
         h('div', { className: 'stat-sub' }, h('a', { href: API, target: '_blank' }, API.replace('https://', ''))),
+      ),
+    ),
+
+    // ---- Reset panel ----
+    h('div', { className: 'card', style: { marginTop: 16, borderColor: resetStep > 0 ? 'var(--err)' : 'var(--border)' } },
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' } },
+        h('div', { style: { flex: 1 } },
+          h('strong', null, '🔄 Reset Fleet'),
+          h('div', { className: 'muted', style: { fontSize: 12, marginTop: 4 } },
+            'Wipes all scraped data (companies, quarantine, runs) from the backend and signals every laptop to clear its local dedup cache. Laptops will start fresh on their next heartbeat (~30s).',
+          ),
+          resetMsg && h('div', { style: { color: 'var(--ok)', fontSize: 13, marginTop: 6 } }, resetMsg),
+        ),
+        resetStep === 0 && h('button', { className: 'btn btn-danger', onClick: () => setResetStep(1) }, 'Reset'),
+        resetStep === 1 && h('div', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
+          h('span', { style: { color: 'var(--warn)', fontSize: 13 } }, '⚠️ This cannot be undone. Sure?'),
+          h('button', { className: 'btn btn-danger', onClick: doReset }, 'Yes, reset everything'),
+          h('button', { className: 'btn btn-ghost', onClick: () => setResetStep(0) }, 'Cancel'),
+        ),
+        resetStep === 2 && h('span', { className: 'muted' }, 'Resetting…'),
       ),
     ),
     h('div', { className: 'tabs', style: { marginTop: 20 } },

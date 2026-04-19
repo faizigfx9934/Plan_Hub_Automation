@@ -47,7 +47,24 @@ function loadPreviousData() {
   return previousData;
 }
 
-const PREVIOUS_SCRAPES = loadPreviousData();
+let PREVIOUS_SCRAPES = loadPreviousData();
+
+// Wipes local runs/ folder and resets the in-memory dedup set.
+// Triggered when the admin panel sends a reset command via the backend.
+function applyReset() {
+  logger.fail('🔄 RESET received — clearing local runs/ and dedup cache...');
+  try {
+    if (fs.existsSync('runs')) {
+      for (const f of fs.readdirSync('runs')) {
+        fs.rmSync(`runs/${f}`, { recursive: true, force: true });
+      }
+    }
+    PREVIOUS_SCRAPES.clear();
+    logger.ok('🔄 Reset complete — starting fresh');
+  } catch (err) {
+    logger.fail(`🔄 Reset error: ${err.message}`);
+  }
+}
 
 async function login(page) {
   logger.step('Login');
@@ -439,6 +456,13 @@ async function main() {
 
     // Continuous loop: keep shifting date window forward until time limit
     while (Date.now() - START_TIME < MAX_RUNTIME_MS) {
+
+      // Check for admin-triggered reset before starting each new day
+      if (telemetry.isResetRequested()) {
+        applyReset();
+        await telemetry.ackReset();
+      }
+
       totalRanges++;
       const elapsed = ((Date.now() - START_TIME) / 1000 / 60).toFixed(1);
       logger.step(`📅 Day #${totalRanges} — today+${dayOffset} (${elapsed} min elapsed)`);

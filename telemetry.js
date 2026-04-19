@@ -133,3 +133,15 @@ export async function reportRunComplete(summary) {
 export function isPaused() {
   return state.remoteConfig.paused === 'true';
 }
+
+export function isResetRequested() {
+  return state.remoteConfig.reset_requested === 'true';
+}
+
+// Called by scraper after it has cleared its local state in response to a reset.
+// Tells the backend to turn off the reset flag.
+export async function ackReset() {
+  await post('/api/config', { key: 'reset_requested', value: 'false' });
+  state.remoteConfig.reset_requested = 'false';
+  logger.ok('📡 Reset acknowledged — local dedup cleared');
+}
