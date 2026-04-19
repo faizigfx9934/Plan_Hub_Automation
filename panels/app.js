@@ -79,7 +79,7 @@ function OwnerDashboard({ token }) {
     } catch (e) { setErr(e.message); }
   }, [token]);
 
-  useEffect(() => { load(); const t = setInterval(load, 30_000); return () => clearInterval(t); }, [load]);
+  useEffect(() => { load(); const t = setInterval(load, 5_000); return () => clearInterval(t); }, [load]);
 
   if (err) return h('div', { className: 'container' }, h('div', { className: 'card' }, `Error: ${err}`));
   if (!stats) return h('div', { className: 'container empty' }, 'Loading…');
@@ -161,7 +161,7 @@ function AdminDashboard({ token }) {
     } catch (e) { setErr(e.message); }
   }, [token]);
 
-  useEffect(() => { load(); const t = setInterval(load, 15_000); return () => clearInterval(t); }, [load]);
+  useEffect(() => { load(); const t = setInterval(load, 5_000); return () => clearInterval(t); }, [load]);
 
   const paused = config.find((r) => r.key === 'paused')?.value === 'true';
   const togglePause = async () => {

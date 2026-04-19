@@ -82,7 +82,7 @@ async function ensureLoggedIn(page, returnUrl = 'https://supplier.planhub.com/pr
 }
 
 async function setDateFilter(page, dayOffset = 0) {
-  logger.step(`Setting date filter (today+${dayOffset} → today+${dayOffset + 7})`);
+  logger.step(`Setting date filter for single day: today+${dayOffset}`);
   await page.goto('https://supplier.planhub.com/project/list', { timeout: 60000, waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(1500);
 
@@ -106,11 +106,10 @@ async function setDateFilter(page, dayOffset = 0) {
   await page.waitForTimeout(1500);
 
   const today = new Date();
+  // Single-day window: start and end are the SAME date
   const startDate = new Date(today);
   startDate.setDate(today.getDate() + dayOffset);
-
-  const endDate = new Date(today);
-  endDate.setDate(today.getDate() + dayOffset + 7);
+  const endDate = new Date(startDate);
 
   const formatMonthDay = (d) =>
     d.toLocaleString('en-US', { month: 'long', day: 'numeric' });
@@ -291,7 +290,7 @@ async function scrapeProject(page, projectName) {
         const phone = bodyText.match(/(\+?\d[\d\s().-]{9,})/)?.[0] || null;
         const website = bodyText.match(/https?:\/\/[^\s]+/)?.[0] || null;
 
-        companyData.push({
+        const record = {
           project: projectName,
           company: companyName,
           email,
@@ -300,10 +299,15 @@ async function scrapeProject(page, projectName) {
           screenshot: screenshotPath,
           scrapedAt: new Date().toISOString(),
           isNew: true,
-        });
-        
+        };
+        companyData.push(record);
+
         newCount++;
         telemetry.incCompanies(1);
+        // Upload this single company immediately so the panel updates in real time
+        // (fire-and-forget — network failure does not block scraping)
+        telemetry.reportCompanies([record]);
+
         await companyPage.close();
         logger.ok(`✓ ${companyName} - done`);
 
@@ -417,12 +421,17 @@ async function main() {
       }
     }
 
-    await setDateFilter(page, 0); // Start with today → today+7
+    // Starting offset: first day to scrape, relative to today.
+    // Controlled via START_DATE_OFFSET in .env. Default 4 (so deploying on the 19th
+    // starts on the 23rd — gives enough lead time to actually bid on the projects).
+    const START_OFFSET = parseInt(process.env.START_DATE_OFFSET ?? '4', 10);
+    let dayOffset = Number.isFinite(START_OFFSET) ? START_OFFSET : 4;
+
+    await setDateFilter(page, dayOffset);
 
     const allData = [];
     const quarantine = [];
     let pageNum = 1;
-    let dayOffset = 0; // Tracks how many days forward we've shifted
     let totalRanges = 0;
 
     // Start telemetry heartbeat loop (no-op if TELEMETRY_URL / INGEST_TOKEN missing)
@@ -432,7 +441,7 @@ async function main() {
     while (Date.now() - START_TIME < MAX_RUNTIME_MS) {
       totalRanges++;
       const elapsed = ((Date.now() - START_TIME) / 1000 / 60).toFixed(1);
-      logger.step(`📅 Date range #${totalRanges} (${elapsed} min elapsed)`);
+      logger.step(`📅 Day #${totalRanges} — today+${dayOffset} (${elapsed} min elapsed)`);
       
       // Reset page counter for this date range
       pageNum = 1;
@@ -459,8 +468,7 @@ async function main() {
             const data = await scrapeProject(page, projectName);
             allData.push(...data);
             fs.writeFileSync(`${OUTPUT_DIR}/data.json`, JSON.stringify(allData, null, 2));
-            // Upload this project's companies to telemetry backend (best-effort)
-            telemetry.reportCompanies(data);
+            // (Companies already uploaded live as each was scraped — no batch upload needed)
           } catch (err) {
             // One bad project must never kill an 8.5hr run.
             // Quarantine it, take a diagnostic screenshot, move on.
@@ -470,7 +478,7 @@ async function main() {
               error: err.message,
               stack: err.stack,
               failedAt: new Date().toISOString(),
-              dateRange: `today+${dayOffset} → today+${dayOffset + 7}`,
+              dateRange: `today+${dayOffset}`,
             };
             quarantine.push(entry);
             fs.writeFileSync(`${OUTPUT_DIR}/quarantine.json`, JSON.stringify(quarantine, null, 2));
@@ -493,9 +501,9 @@ async function main() {
         pageNum++;
       } while (await paginate(page) && Date.now() - START_TIME < MAX_RUNTIME_MS);
 
-      // After completing this date range, shift forward by 1 day
+      // Move to the next day
       dayOffset++;
-      logger.info(`🔄 Shifting date window forward to day +${dayOffset}...`);
+      logger.info(`🔄 Advancing to next day: today+${dayOffset}...`);
 
       // Setting the date filter can fail (PlanHub DOM quirks). Don't let that kill the run —
       // retry once, and if it still fails, skip this day and try the next.
@@ -512,7 +520,7 @@ async function main() {
             project: '(date-filter)',
             error: err2.message,
             failedAt: new Date().toISOString(),
-            dateRange: `today+${dayOffset} → today+${dayOffset + 7}`,
+            dateRange: `today+${dayOffset}`,
           });
           fs.writeFileSync(`${OUTPUT_DIR}/quarantine.json`, JSON.stringify(quarantine, null, 2));
           continue;

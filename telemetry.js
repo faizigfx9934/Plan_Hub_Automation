@@ -67,7 +67,7 @@ export function setStatus(s) {
 }
 
 // Start background heartbeat loop. Returns a stop function.
-export function startHeartbeat({ intervalMs = 60_000 } = {}) {
+export function startHeartbeat({ intervalMs = 30_000 } = {}) {
   if (!isEnabled()) {
     logger.info('📡 Telemetry disabled (TELEMETRY_URL or INGEST_TOKEN missing)');
     return () => {};
