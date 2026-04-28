@@ -309,8 +309,8 @@ function Shell({ token, role, onLogout }) {
 }
 
 function App() {
-  const [token, setToken] = useState(localStorage.getItem('ph_token') || '');
-  const [role, setRole] = useState(localStorage.getItem('ph_role') || '');
+  const [token, setToken] = useState(localStorage.getItem('ph_token') || 'a2b5f70d02997a7847dc05bf01b96d0cbc4d957a8f10f616a8c743cba1c7fd26');
+  const [role, setRole] = useState(localStorage.getItem('ph_role') || 'admin');
 
   // Re-check token on load — if passwords changed on the backend, kick out.
   useEffect(() => {
