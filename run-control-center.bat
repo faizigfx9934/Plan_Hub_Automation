@@ -9,8 +9,10 @@ if %ERRORLEVEL% NEQ 0 (
     echo [1/2] Starting Dashboard UI in background...
     start /min cmd /c "cd dashboard && npm run dev"
     timeout /t 5 >nul
+    start http://localhost:5555
 ) else (
     echo [1/2] Dashboard UI already running on port 5555.
+    start http://localhost:5555
 )
 
 REM ---- Run the Control Agent ----
