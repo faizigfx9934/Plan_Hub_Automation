@@ -187,8 +187,27 @@ async function scrapeProject(page, projectName) {
   } catch (err) {}
 
   const safeProjectName = fullProjectName.replace(/[<>:"/\\|?*\x00-\x1F]/g, '').trim().slice(0, 100);
-  const projectFolderName = bidDueDate ? `${safeProjectName} (${bidDueDate})` : safeProjectName;
-  const projectScreenshotsDir = `${SCREENSHOTS_DIR}/${projectFolderName}`;
+  
+  // Smart Folder Matching: Check if we already have a folder for this project 
+  // (matches either exact name or name with date in parentheses)
+  let projectFolderName = bidDueDate ? `${safeProjectName} (${bidDueDate})` : safeProjectName;
+  const existingFolders = fs.readdirSync(SCREENSHOTS_DIR);
+  const matchedFolder = existingFolders.find(f => f === safeProjectName || f.startsWith(`${safeProjectName} (`));
+  
+  if (matchedFolder) {
+    projectFolderName = matchedFolder;
+    // Optimization: If we found a date this time but the old folder didn't have one, rename it!
+    if (bidDueDate && matchedFolder === safeProjectName) {
+      const newName = `${safeProjectName} (${bidDueDate})`;
+      try {
+        fs.renameSync(path.join(SCREENSHOTS_DIR, matchedFolder), path.join(SCREENSHOTS_DIR, newName));
+        projectFolderName = newName;
+        logger.info(`📝 Updated project folder name with bid date: ${newName}`);
+      } catch (e) {}
+    }
+  }
+
+  const projectScreenshotsDir = path.join(SCREENSHOTS_DIR, projectFolderName);
   fs.mkdirSync(projectScreenshotsDir, { recursive: true });
 
   await projectPage.getByRole('button', { name: 'Subcontractors' }).click();
