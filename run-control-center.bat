@@ -15,5 +15,5 @@ if %ERRORLEVEL% NEQ 0 (
 
 REM ---- Run the Control Agent ----
 echo [2/2] Starting Control Agent...
-node control-agent.js
+node src/control-agent.js
 pause

@@ -5,43 +5,23 @@ node_modules/
 .env
 session.json
 
-# Runtime output — regenerated on every run
+# Runtime output
 runs/
 screenshots/
+data/progress.json
+data/stats_test.json
 
 # Build artifacts
 build/
 dist/
-*.spec.bak
 
-# Python
+# Python / Logs
 __pycache__/
-*.pyc
-venv/
-.venv/
-
-# OS / editor
-.DS_Store
-Thumbs.db
-.vscode/
-.idea/
-*.swp
-*~
-
-# Logs
 *.log
-
-# Cloudflare / wrangler
-.wrangler/
-.dev.vars
-backend/node_modules/
+venv/
 
 # Local data & backups
-progress.json
-stats_test.json
-preserved-*
+data/preserved-*
 backups/
-scraper - Copy.js
-*.zip
 *.xlsx
 *.csv

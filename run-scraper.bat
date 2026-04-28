@@ -79,7 +79,7 @@ set ATTEMPT=1
 :RUN_SCRAPER
 echo [4/4] Starting scraper ^(attempt %ATTEMPT%^)... ^(Press Ctrl+C to stop anytime^)
 echo.
-node scraper.js
+node src/scraper.js
 set EXITCODE=%ERRORLEVEL%
 
 if %EXITCODE% EQU 0 (

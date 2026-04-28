@@ -11,7 +11,7 @@ import * as telemetry from './telemetry.js';
 const RUN_FOREVER = process.env.RUN_FOREVER === 'true';
 const MAX_RUNTIME_MS = 8.5 * 60 * 60 * 1000;
 const START_TIME = Date.now();
-const PROGRESS_FILE = 'progress.json';
+const PROGRESS_FILE = 'data/progress.json';
 
 const OUTPUT_DIR = `runs/${new Date().toISOString().split('T')[0]}`;
 fs.mkdirSync(`${OUTPUT_DIR}`, { recursive: true });
