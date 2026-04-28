@@ -19,10 +19,23 @@ foreach ($app in $apps) {
     }
 }
 
-# 2. Setup Working Directory
-Write-Host "`n[2/5] Configuring Workspace (C:\planhub)..." -ForegroundColor Yellow
+# 2. Setup Working Directory (With Clean Wipe Option)
 $InstallDir = "C:\planhub"
-if (!(Test-Path $InstallDir)) {
+if (Test-Path $InstallDir) {
+    Write-Host "`n[!] PREVIOUS INSTALLATION DETECTED at $InstallDir" -ForegroundColor Magenta
+    $choice = Read-Host "Do you want to PERFORM A CLEAN WIPE? This deletes all old data/config. (y/n)"
+    if ($choice -eq 'y') {
+        Write-Host "   Wiping $InstallDir..." -ForegroundColor Red
+        # Kill processes first
+        taskkill /F /IM node.exe /T 2>$null
+        Stop-Process -Name "chrome" -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path $InstallDir -Recurse -Force
+        New-Item -ItemType Directory -Path $InstallDir
+        Write-Host "   Wipe complete. Starting fresh installation." -ForegroundColor Green
+    } else {
+        Write-Host "   Continuing with existing folder (Updating only)..." -ForegroundColor Yellow
+    }
+} else {
     New-Item -ItemType Directory -Path $InstallDir
 }
 Set-Location $InstallDir
