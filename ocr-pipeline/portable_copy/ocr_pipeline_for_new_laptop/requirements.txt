@@ -1,0 +1,8 @@
+paddlepaddle==2.6.2
+paddleocr==2.7.3
+numpy<2
+opencv-python-headless==4.9.0.80
+Pillow==10.3.0
+tqdm==4.66.4
+gspread==6.1.2
+google-auth==2.29.0
