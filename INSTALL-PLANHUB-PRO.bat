@@ -16,19 +16,17 @@ if %errorLevel% neq 0 (
 )
 
 set INSTALL_DIR=C:\planhub
+set SETUP_SCRIPT=%TEMP%\setup-laptop-planhub.ps1
 set REPO_URL=https://github.com/faizigfx9934/Plan_Hub_Automation.git
 
-if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
-cd /d "%INSTALL_DIR%"
-
 echo [+] Starting Full Installation from %REPO_URL%...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/faizigfx9934/Plan_Hub_Automation/main/setup-laptop.ps1' -OutFile 'setup-laptop.ps1'"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/faizigfx9934/Plan_Hub_Automation/main/setup-laptop.ps1' -OutFile '%SETUP_SCRIPT%'"
 
-if not exist "setup-laptop.ps1" (
+if not exist "%SETUP_SCRIPT%" (
     echo [ERROR] Setup script missing. Please ensure internet access.
     pause
     exit /b 1
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "setup-laptop.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%SETUP_SCRIPT%"
 pause
