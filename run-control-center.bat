@@ -7,13 +7,13 @@ REM ---- Start the Dashboard Server if not already running ----
 netstat -ano | findstr :5678 >nul
 if %ERRORLEVEL% NEQ 0 (
     echo [1/2] Starting Dashboard Server on port 5678...
-    start /min "DashboardServer" cmd /c "node panels/server.js"
+    start "DashboardServer" cmd /c "node panels/server.js"
     echo      Waiting for server to initialize...
-    timeout /t 4 >nul
-    start http://localhost:5678
+    timeout /t 5 >nul
+    start http://127.0.0.1:5678
 ) else (
     echo [1/2] Dashboard Server already running on port 5678.
-    start http://localhost:5678
+    start http://127.0.0.1:5678
 )
 
 REM ---- Run the Control Agent ----
