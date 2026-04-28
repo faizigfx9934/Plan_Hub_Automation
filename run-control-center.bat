@@ -6,12 +6,12 @@ cd /d "%~dp0"
 REM ---- Start the Dashboard UI if not already running ----
 netstat -ano | findstr :5555 >nul
 if %ERRORLEVEL% NEQ 0 (
-    echo [1/2] Starting Dashboard UI...
-    start /min cmd /c "npx -y serve -p 5555 panels"
-    timeout /t 3 >nul
+    echo [1/2] Starting Dashboard Server...
+    start /min cmd /c "node panels/server.js"
+    timeout /t 2 >nul
     start http://localhost:5555
 ) else (
-    echo [1/2] Dashboard UI already running on port 5555.
+    echo [1/2] Dashboard Server already running on port 5555.
     start http://localhost:5555
 )
 
