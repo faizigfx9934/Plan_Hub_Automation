@@ -1,121 +1,101 @@
-// Telemetry client — talks to the Cloudflare Worker backend.
-//
-// All functions are fire-and-forget. If the backend is down or the network is
-// flaky, we log and swallow the error — a telemetry failure must NEVER break
-// an 8.5hr scraping run.
-
 import { logger } from './logger.js';
+import 'dotenv/config';
 
-const BASE = process.env.TELEMETRY_URL || '';
-const TOKEN = process.env.INGEST_TOKEN || '';
-const LAPTOP_ID = process.env.LAPTOP_ID || 'unknown-laptop';
-const STATE = process.env.STATE || '';
+const TELEMETRY_URL = process.env.TELEMETRY_URL;
+const INGEST_TOKEN = process.env.INGEST_TOKEN;
+const LAPTOP_ID = process.env.LAPTOP_ID || 'Unknown';
 
-const isEnabled = () => Boolean(BASE && TOKEN);
-
-async function post(path, body, { timeoutMs = 10000 } = {}) {
-  if (!isEnabled()) return null;
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    const res = await fetch(`${BASE}${path}`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${TOKEN}`,
-      },
-      body: JSON.stringify(body),
-      signal: ctrl.signal,
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      logger.fail(`📡 telemetry ${path} → ${res.status}: ${data.error || 'unknown'}`);
-      return null;
-    }
-    return data;
-  } catch (err) {
-    logger.fail(`📡 telemetry ${path} failed: ${err.message}`);
-    return null;
-  } finally {
-    clearTimeout(t);
-  }
-}
-
-// ---- Public API ----
-
-// State shared with the heartbeat so the loop can read current progress.
-export const state = {
+const state = {
+  logBuffer: [],
   startedAt: Date.now(),
-  currentProject: null,
-  companiesToday: 0,
-  status: 'idle',        // 'idle' | 'running' | 'error' | 'stopped'
-  version: null,         // set by scraper if we detect git commit hash
-  remoteConfig: {},      // last config received from server (e.g., paused)
+  currentStatus: 'idle',
+  remoteConfig: { paused: 'false' },
 };
 
-export function setCurrentProject(name) {
-  state.currentProject = name;
-  state.status = 'running';
+export function isEnabled() {
+  return !!(TELEMETRY_URL && INGEST_TOKEN);
 }
 
-export function incCompanies(n = 1) {
-  state.companiesToday += n;
-}
+async function post(path, body, { timeoutMs = 10000, retries = 3 } = {}) {
+  if (!isEnabled()) return false;
 
-export function setStatus(s) {
-  state.status = s;
-}
+  for (let i = 0; i < retries; i++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
 
-// Start background heartbeat loop. Returns a stop function.
-export function startHeartbeat({ intervalMs = 30_000 } = {}) {
-  if (!isEnabled()) {
-    logger.info('📡 Telemetry disabled (TELEMETRY_URL or INGEST_TOKEN missing)');
-    return () => {};
+    try {
+      const res = await fetch(`${TELEMETRY_URL}${path}`, {
+        method: 'POST',
+        signal: ctrl.signal,
+        headers: {
+          'Authorization': `Bearer ${INGEST_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (res.ok) {
+        if (path === '/api/heartbeat') {
+          const data = await res.json();
+          if (data.config) state.remoteConfig = data.config;
+        }
+        return true;
+      }
+    } catch (e) {
+      // Quietly retry
+    } finally {
+      clearTimeout(timer);
+    }
   }
-  logger.ok(`📡 Telemetry enabled — heartbeats to ${BASE}`);
+  return false;
+}
+
+export function setStatus(status) {
+  state.currentStatus = status;
+}
+
+export function addLog(message, level = 'info') {
+  const cleanMessage = typeof message === 'string' ? message.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '') : String(message);
+  state.logBuffer.push({ message: cleanMessage, level, ts: Date.now() });
+  if (state.logBuffer.length > 500) state.logBuffer.shift();
+}
+
+async function uploadLogBatch() {
+  if (state.logBuffer.length === 0) return;
+  const logs = [...state.logBuffer];
+  state.logBuffer = [];
+  const ok = await post('/api/logs', { laptop_id: LAPTOP_ID, logs });
+  if (!ok) {
+    state.logBuffer = [...logs, ...state.logBuffer].slice(0, 500);
+  }
+}
+
+export function startHeartbeat({ intervalMs = Number(process.env.HEARTBEAT_INTERVAL_MS || 5000) } = {}) {
+  if (!isEnabled()) return () => {};
+
+  let timer = null;
   const tick = async () => {
-    const resp = await post('/api/heartbeat', {
+    await post('/api/heartbeat', {
       laptop_id: LAPTOP_ID,
-      state: STATE,
-      status: state.status,
-      current_project: state.currentProject,
-      elapsed_ms: Date.now() - state.startedAt,
-      companies_today: state.companiesToday,
-      version: state.version,
+      status: state.currentStatus,
+      state: process.env.STATE || 'CA',
+      current_project: logger.getContext() || 'Idle',
     });
-    if (resp?.config) state.remoteConfig = resp.config;
+    await uploadLogBatch();
+    timer = setTimeout(tick, intervalMs);
   };
-  // fire one immediately so the laptop shows up in the panel fast
+
   tick();
-  const handle = setInterval(tick, intervalMs);
-  return () => clearInterval(handle);
+  return () => clearTimeout(timer);
 }
 
-export async function reportQuarantine({ project, error, stack, dateRange }) {
-  setStatus('error');
-  await post('/api/quarantine', {
+export async function reportStopping() {
+  setStatus('stopped');
+  await post('/api/heartbeat', {
     laptop_id: LAPTOP_ID,
-    project,
-    error,
-    stack,
-    date_range: dateRange,
-  });
-}
-
-export async function reportCompanies(companies) {
-  if (!companies?.length) return;
-  await post('/api/companies', {
-    laptop_id: LAPTOP_ID,
-    state: STATE,
-    companies: companies.map((c) => ({
-      project: c.project,
-      company: c.company,
-      email: c.email,
-      phone: c.phone,
-      website: c.website,
-      scraped_at: Date.parse(c.scrapedAt) || Date.now(),
-    })),
-  });
+    status: 'stopped',
+    current_project: '(exiting)',
+  }, { timeoutMs: 2000, retries: 1 });
 }
 
 export async function reportRunComplete(summary) {
@@ -132,16 +112,4 @@ export async function reportRunComplete(summary) {
 
 export function isPaused() {
   return state.remoteConfig.paused === 'true';
-}
-
-export function isResetRequested() {
-  return state.remoteConfig.reset_requested === 'true';
-}
-
-// Called by scraper after it has cleared its local state in response to a reset.
-// Tells the backend to turn off the reset flag.
-export async function ackReset() {
-  await post('/api/config', { key: 'reset_requested', value: 'false' });
-  state.remoteConfig.reset_requested = 'false';
-  logger.ok('📡 Reset acknowledged — local dedup cleared');
 }
