@@ -8,7 +8,20 @@ const __dirname = path.dirname(__filename);
 
 // Serve the built React dashboard
 const DIST_DIR = path.join(__dirname, '..', 'dashboard', 'dist');
+const ROOT_DIR = path.join(__dirname, '..');
 const PORT = 9090;
+
+// Read LAPTOP_ID from .env file
+function getLaptopId() {
+    try {
+        const envPath = path.join(ROOT_DIR, '.env');
+        const envContent = fs.readFileSync(envPath, 'utf-8');
+        const match = envContent.match(/LAPTOP_ID=(.+)/);
+        return match ? match[1].trim() : 'Unknown';
+    } catch {
+        return 'Unknown';
+    }
+}
 
 const MIME_TYPES = {
     '.html': 'text/html',
@@ -22,6 +35,15 @@ const MIME_TYPES = {
 
 const server = http.createServer((req, res) => {
     let urlPath = req.url.split('?')[0];
+
+    // API endpoint: return this laptop's ID
+    if (urlPath === '/api/local-id') {
+        const laptopId = getLaptopId();
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' });
+        res.end(JSON.stringify({ laptop_id: laptopId }));
+        return;
+    }
+
     if (urlPath === '/') urlPath = '/index.html';
 
     const filePath = path.join(DIST_DIR, urlPath);
@@ -51,9 +73,10 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
+    const id = getLaptopId();
     console.log('========================================');
     console.log('  PLANHUB PRO DASHBOARD IS LIVE');
+    console.log(`  Laptop: ${id}`);
     console.log(`  http://127.0.0.1:${PORT}`);
-    console.log(`  Serving from: ${DIST_DIR}`);
     console.log('========================================');
 });

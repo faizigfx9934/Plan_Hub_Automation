@@ -30,6 +30,15 @@ function App() {
   const [fleetConfig, setFleetConfig] = useState({});
   const [isLoading, setIsLoading] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(new Date());
+  const [localLaptopId, setLocalLaptopId] = useState('');
+
+  // Fetch this laptop's ID from the local server
+  useEffect(() => {
+    fetch('/api/local-id')
+      .then(r => r.json())
+      .then(d => setLocalLaptopId(d.laptop_id || ''))
+      .catch(() => setLocalLaptopId(''));
+  }, []);
 
   const fetchWithAuth = useCallback(async (path, options = {}) => {
     if (!token) return null;
@@ -240,24 +249,28 @@ function App() {
           </div>
         </header>
 
-        {activeTab === 'dashboard' && (
+        {activeTab === 'dashboard' && (() => {
+          const myLaptop = laptops.find(l => l.id === localLaptopId);
+          const isOnline = myLaptop && (Date.now() - myLaptop.last_seen) < 5 * 60 * 1000;
+          return (
           <div className="fade-enter-active">
+            {localLaptopId && <h3 style={{ marginBottom: '24px', fontSize: '20px', opacity: 0.6 }}>📍 {localLaptopId}</h3>}
             <div className="stats-grid">
               <div className="stat-card">
                 <div className="stat-header">
                   <div className="stat-icon"><Database size={20} /></div>
-                  <span className="status-dot status-online"></span>
+                  <span className={`status-dot ${isOnline ? 'status-online' : 'status-offline'}`}></span>
                 </div>
-                <div className="stat-value">{stats.companies.today}</div>
-                <div className="stat-label">Companies Scraped Today</div>
+                <div className="stat-value">{myLaptop ? myLaptop.companies_today : 0}</div>
+                <div className="stat-label">My Companies Today</div>
               </div>
               
               <div className="stat-card">
                 <div className="stat-header">
-                  <div className="stat-icon"><Clock size={20} /></div>
+                  <div className="stat-icon"><Laptop size={20} /></div>
                 </div>
-                <div className="stat-value">{stats.companies.week}</div>
-                <div className="stat-label">Companies This Week</div>
+                <div className="stat-value" style={{ fontSize: '18px', color: isOnline ? 'var(--success)' : 'var(--error)' }}>{myLaptop ? (isOnline ? myLaptop.status?.toUpperCase() : 'OFFLINE') : 'N/A'}</div>
+                <div className="stat-label">My Status</div>
               </div>
 
               <div className="stat-card">
@@ -265,28 +278,45 @@ function App() {
                   <div className="stat-icon"><Activity size={20} /></div>
                 </div>
                 <div className="stat-value">{stats.laptops_online}</div>
-                <div className="stat-label">Active Laptops Online</div>
+                <div className="stat-label">Fleet Laptops Online</div>
               </div>
             </div>
 
-            <h3 style={{ marginBottom: '24px', fontSize: '20px' }}>Quick Overview</h3>
+            <h3 style={{ marginBottom: '24px', fontSize: '20px' }}>My Progress</h3>
             <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
               <div className="stat-card" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <span className="stat-label">System Performance</span>
-                <div style={{ height: '120px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.02)', borderRadius: '12px' }}>
-                   <p style={{ color: 'var(--text-dim)', fontSize: '13px' }}>Scraping speed: {stats.companies.today > 0 ? (stats.companies.today / 12).toFixed(1) : 0} companies/hr</p>
+                <span className="stat-label">Current Project</span>
+                <div style={{ minHeight: '80px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', padding: '16px' }}>
+                   <p style={{ color: 'var(--text-main)', fontSize: '15px', fontWeight: '600', textAlign: 'center' }}>{myLaptop?.current_project || 'Idle / Waiting'}</p>
                 </div>
               </div>
               <div className="stat-card">
-                <span className="stat-label">Active State</span>
+                <span className="stat-label">Scraping Region</span>
                 <div style={{ fontSize: '24px', fontWeight: '700', marginTop: '12px', color: 'var(--primary)' }}>
-                  {laptops.length > 0 ? laptops[0].state : 'N/A'}
+                  {myLaptop?.state || 'N/A'}
                 </div>
-                <p style={{ fontSize: '13px', color: 'var(--text-dim)', marginTop: '8px' }}>Primary data region</p>
+                <p style={{ fontSize: '13px', color: 'var(--text-dim)', marginTop: '8px' }}>Assigned state</p>
+              </div>
+            </div>
+
+            <h3 style={{ marginBottom: '24px', fontSize: '20px', marginTop: '32px' }}>Fleet Summary</h3>
+            <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+              <div className="stat-card">
+                <div className="stat-value">{stats.companies.today}</div>
+                <div className="stat-label">All Laptops Today</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-value">{stats.companies.week}</div>
+                <div className="stat-label">All Laptops This Week</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-value">{stats.companies.total}</div>
+                <div className="stat-label">All Time Total</div>
               </div>
             </div>
           </div>
-        )}
+          );
+        })()}
 
         {activeTab === 'laptops' && (
           <div className="laptops-grid fade-enter-active">
