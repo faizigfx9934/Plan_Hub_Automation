@@ -36,8 +36,12 @@ Thumbs.db
 .dev.vars
 backend/node_modules/
 
-# Local credential / token notes — never commit
-*Credentials*
-*Tokens*
-*credentials*
-*tokens*
+# Local data & backups
+progress.json
+stats_test.json
+preserved-*
+backups/
+scraper - Copy.js
+*.zip
+*.xlsx
+*.csv
