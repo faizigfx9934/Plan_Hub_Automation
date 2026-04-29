@@ -161,9 +161,9 @@ Set-Location $OcrDir
 if (Get-Command python -ErrorAction SilentlyContinue) {
     Write-Log "   Creating virtual environment..." "Gray"
     python -m venv venv
-    Write-Log "   Installing AI Models & Dependencies (May take 5-10 mins)..." "Gray"
-    venv\Scripts\python.exe -m pip install --upgrade pip --quiet
-    venv\Scripts\python.exe -m pip install -r requirements.txt --no-cache-dir --quiet
+    Write-Log "   Installing AI Models & Dependencies (Large Download)..." "Gray"
+    venv\Scripts\python.exe -m pip install --upgrade pip
+    venv\Scripts\python.exe -m pip install -r requirements.txt --no-cache-dir
     Write-Log "   Verifying Google API access..." "Gray"
     venv\Scripts\python.exe -c "import google.oauth2; import gspread; print('SUCCESS')"
 } else {
