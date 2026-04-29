@@ -18,5 +18,8 @@ start http://127.0.0.1:9090
 
 REM ---- Run the Control Agent ----
 echo [2/2] Starting Control Agent...
-node src/control-agent.js
+start "PlanHub-Control-Agent" node src/control-agent.js
+echo      Control Agent is running in a separate window.
+echo.
+echo All systems active. Close this window if you wish; servers will persist.
 pause

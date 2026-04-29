@@ -13,9 +13,11 @@ const RUN_FOREVER = process.env.RUN_FOREVER === 'true';
 const MAX_RUNTIME_MS = 8.5 * 60 * 60 * 1000;
 const START_TIME = Date.now();
 const PROGRESS_FILE = 'data/progress.json';
+const DEDUP_FILE = 'data/dedup.json';
 
 const OUTPUT_DIR = `runs/${new Date().toISOString().split('T')[0]}`;
 fs.mkdirSync(`${OUTPUT_DIR}`, { recursive: true });
+fs.mkdirSync('data', { recursive: true });
 
 const SCREENSHOTS_DIR = 'screenshots';
 fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
@@ -43,33 +45,108 @@ function loadProgress() {
 }
 
 function saveProgress(offset) {
-  const data = {
-    dayOffset: offset,
-    timestamp: new Date().toISOString()
-  };
-  fs.writeFileSync(PROGRESS_FILE, JSON.stringify(data, null, 2));
-  logger.ok(`💾 Progress saved: dayOffset ${offset}`);
+  try {
+    const data = {
+      dayOffset: offset,
+      timestamp: new Date().toISOString()
+    };
+    const dir = path.dirname(PROGRESS_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(PROGRESS_FILE, JSON.stringify(data, null, 2));
+    logger.ok(`💾 Progress saved: dayOffset ${offset}`);
+  } catch (err) {
+    logger.fail(`Failed to save progress: ${err.message}`);
+  }
+}
+
+function findProjectFolder(projectName) {
+  const safeProjectName = projectName.replace(/[<>:"/\\|?*\x00-\x1F]/g, '').trim().slice(0, 100);
+  
+  // 1. Search in main screenshots dir
+  if (fs.existsSync(SCREENSHOTS_DIR)) {
+    const folders = fs.readdirSync(SCREENSHOTS_DIR);
+    const match = folders.find(f => f === safeProjectName || f.startsWith(`${safeProjectName} (`));
+    if (match) return path.join(SCREENSHOTS_DIR, match);
+  }
+
+  // 2. Search in OCR done dir
+  if (fs.existsSync(OCR_DONE_DIR)) {
+    const folders = fs.readdirSync(OCR_DONE_DIR);
+    const match = folders.find(f => f === safeProjectName || f.startsWith(`${safeProjectName} (`));
+    if (match) return path.join(OCR_DONE_DIR, match);
+  }
+
+  return null;
+}
+
+function isCompanyInOcrDone(projectName, companyName) {
+  const projectFolderInOcr = findProjectFolder(projectName);
+  if (!projectFolderInOcr) return false;
+
+  const safeCompanyName = companyName.replace(/[^a-z0-9]/gi, '_').toLowerCase().slice(0, 30);
+  if (fs.existsSync(projectFolderInOcr)) {
+    const files = fs.readdirSync(projectFolderInOcr);
+    // OCR files usually have names like: company_location_date.png
+    return files.some(f => f.toLowerCase().startsWith(safeCompanyName));
+  }
+  return false;
+}
+
+function countScreenshots(folderPath) {
+  if (!folderPath || !fs.existsSync(folderPath)) return 0;
+  return fs.readdirSync(folderPath).filter(f => f.endsWith('.png')).length;
 }
 
 function loadPreviousData() {
   const previousData = new Set();
+  
+  // 1. Load from master dedup file
+  if (fs.existsSync(DEDUP_FILE)) {
+    try {
+      const lines = fs.readFileSync(DEDUP_FILE, 'utf8').split('\n').filter(Boolean);
+      lines.forEach(line => previousData.add(line.trim()));
+      logger.info(`Loaded ${previousData.size} from ${DEDUP_FILE}`);
+    } catch (err) {}
+  }
+
+  // 2. Load from any existing runs (backwards compatibility/sync)
   const runsDir = 'runs';
-  if (!fs.existsSync(runsDir)) return previousData;
-  const runFolders = fs.readdirSync(runsDir);
-  for (const folder of runFolders) {
-    const jsonPath = `${runsDir}/${folder}/data.json`;
-    if (fs.existsSync(jsonPath)) {
-      try {
-        const data = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
-        data.forEach(entry => {
-          const key = `${entry.project}|||${entry.company}`;
-          previousData.add(key);
-        });
-      } catch (err) {}
+  if (fs.existsSync(runsDir)) {
+    const runFolders = fs.readdirSync(runsDir);
+    for (const folder of runFolders) {
+      const jsonPath = `${runsDir}/${folder}/data.json`;
+      if (fs.existsSync(jsonPath)) {
+        try {
+          const data = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+          data.forEach(entry => {
+            const key = `${entry.project}|||${entry.company}`;
+            if (!previousData.has(key)) {
+              previousData.add(key);
+              // Append to dedup if missing
+              fs.appendFileSync(DEDUP_FILE, key + '\n');
+            }
+          });
+        } catch (err) {}
+      }
     }
   }
-  logger.info(`Loaded ${previousData.size} previously scraped companies for dedup`);
+  
+  logger.info(`Final dedup set size: ${previousData.size}`);
   return previousData;
+}
+
+function saveToDedup(projectName, companyName) {
+  try {
+    const key = `${projectName}|||${companyName}`;
+    if (!PREVIOUS_SCRAPES.has(key)) {
+      PREVIOUS_SCRAPES.add(key);
+      const dir = path.dirname(DEDUP_FILE);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.appendFileSync(DEDUP_FILE, key + '\n');
+    }
+  } catch (err) {
+    logger.fail(`Failed to save dedup: ${err.message}`);
+  }
 }
 
 let PREVIOUS_SCRAPES = loadPreviousData();
@@ -211,38 +288,51 @@ async function setDateFilter(page, dayOffset = 0) {
 
 async function getProjectsOnCurrentPage(page) {
   logger.info('⏳ Waiting for project list to stabilize...');
-  await page.waitForSelector('table tr', { timeout: 15000 }).catch(() => {});
-  await page.waitForTimeout(5000); // Added more weight to load the project section
+  await page.waitForSelector('table tbody tr', { timeout: 15000 }).catch(() => {});
+  await page.waitForTimeout(5000); 
   
   let rows = await page.locator('table tbody tr').all();
   
-  // Tweak: If no projects found, wait another 5s and try one last time (PlanHub lag protection)
   if (rows.length === 0) {
-    logger.info('   Empty list detected. Giving PlanHub 5 more seconds to load...');
+    logger.info('   Empty list detected. Giving PlanHub 5 more seconds...');
     await page.waitForTimeout(5000);
     rows = await page.locator('table tbody tr').all();
   }
 
   const projects = [];
   for (const row of rows) {
-    const rowText = await row.innerText().catch(() => '');
-    const cells = await row.locator('td').all();
-    if (!cells.length) continue;
+    try {
+      // Ensure row is visible and has data
+      if (!(await row.isVisible())) continue;
+      
+      const cells = await row.locator('td').all();
+      if (cells.length < 2) continue;
 
-    const firstCellText = (await cells[0].innerText().catch(() => '')).trim();
-    const nameCell = cells.find((_, index) => index > 0) || cells[0];
-    const projectCellText = await nameCell.innerText().catch(() => rowText);
-    const name = projectCellText
-      .split('\n')
-      .map(line => line.trim())
-      .filter(Boolean)
-      .filter(line => !/^lock$/i.test(line))[0];
-    
-    if (!name) continue;
+      const firstCellText = (await cells[0].innerText().catch(() => '')).trim();
+      
+      // Usually the project name is in the second or third cell
+      let name = '';
+      for (let i = 1; i < Math.min(cells.length, 4); i++) {
+          const text = (await cells[i].innerText().catch(() => '')).trim();
+          if (text && !/^lock$/i.test(text) && text.length > 3) {
+              name = text.split('\n')[0].trim();
+              break;
+          }
+      }
+      
+      if (!name) continue;
 
-    const locked = /^lock$/i.test(firstCellText) || /unlock/i.test(firstCellText);
-    projects.push({ name, locked });
+      const locked = /^lock$/i.test(firstCellText) || /unlock/i.test(firstCellText) || (await row.innerText()).includes('lock');
+      projects.push({ name, locked });
+    } catch (err) {
+      // Skip problematic rows
+    }
   }
+  
+  if (projects.length > 0) {
+    logger.info(`📋 Projects on this page: ${projects.map((p, i) => `[${i+1}] ${p.name}`).join(', ')}`);
+  }
+  
   return projects;
 }
 
@@ -282,8 +372,15 @@ async function scrapeProject(page, projectInfo) {
     return [];
   }
 
-  logger.step(`Scraping project: ${projectName}`);
+  logger.step(`Analyzing project: ${projectName}`);
   logger.setContext(projectName);
+
+  // 1. Initial Quick Check: Does folder exist and have content?
+  const existingFolder = findProjectFolder(projectName);
+  const localCount = countScreenshots(existingFolder);
+  if (localCount > 0) {
+    logger.info(`   Found existing folder: ${path.basename(existingFolder)} (${localCount} screenshots)`);
+  }
 
   const [projectPage] = await Promise.all([
     page.context().waitForEvent('page'),
@@ -320,15 +417,38 @@ async function scrapeProject(page, projectInfo) {
   const safeProjectName = fullProjectName.replace(/[<>:"/\\|?*\x00-\x1F]/g, '').trim().slice(0, 100);
   const projectFolderName = bidDueDate ? `${safeProjectName} (${bidDueDate})` : safeProjectName;
   const projectScreenshotsDir = path.join(SCREENSHOTS_DIR, projectFolderName);
-  fs.mkdirSync(projectScreenshotsDir, { recursive: true });
+  
+  // Create folder if not exists
+  if (!fs.existsSync(projectScreenshotsDir)) {
+    fs.mkdirSync(projectScreenshotsDir, { recursive: true });
+  }
 
   await projectPage.getByRole('button', { name: 'Subcontractors' }).click();
   await projectPage.waitForTimeout(2500);
 
+  // 2. Detailed Analysis: Compare PlanHub count vs local count
   let totalPages = 1;
-  const pageText = await projectPage.locator('text=/Page \\d+ of \\d+/').first().innerText().catch(() => '');
-  const pageMatch = pageText.match(/Page \d+ of (\d+)/);
+  let totalCompaniesHint = 0;
+  const paginationText = await projectPage.locator('text=/Page \\d+ of \\d+/').first().innerText().catch(() => '');
+  const pageMatch = paginationText.match(/Page \d+ of (\d+)/);
   if (pageMatch) totalPages = parseInt(pageMatch[1]);
+
+  // Try to find total results count (e.g. "1-20 of 154")
+  const resultsText = await projectPage.locator('text=/\\d+-\\d+ of \\d+/').first().innerText().catch(() => '');
+  const resultsMatch = resultsText.match(/of (\d+)/);
+  if (resultsMatch) {
+    totalCompaniesHint = parseInt(resultsMatch[1]);
+    logger.info(`📊 Project Stats: ${totalCompaniesHint} total companies on PlanHub.`);
+  } else {
+    logger.info(`📊 Project Stats: ${totalPages} pages of companies.`);
+  }
+
+  const currentLocalCount = countScreenshots(projectScreenshotsDir);
+  if (totalCompaniesHint > 0 && currentLocalCount >= totalCompaniesHint) {
+    logger.ok(`✅ Project "${projectName}" already fully scraped (${currentLocalCount}/${totalCompaniesHint}). Skipping.`);
+    await projectPage.close();
+    return [];
+  }
 
   const companyData = [];
   for (let subPage = 1; subPage <= totalPages; subPage++) {
@@ -344,8 +464,27 @@ async function scrapeProject(page, projectInfo) {
     const companiesOnThisPage = await collectCompanyEntries(projectPage);
     
     for (const companyName of companiesOnThisPage) {
-      const dedupKey = `${projectName}|||${companyName}`;
-      if (PREVIOUS_SCRAPES.has(dedupKey)) continue;
+      const dedupKeyShort = `${projectName}|||${companyName}`;
+      const dedupKeyFull = `${fullProjectName}|||${companyName}`;
+      
+      const alreadyScraped = PREVIOUS_SCRAPES.has(dedupKeyShort) || PREVIOUS_SCRAPES.has(dedupKeyFull);
+      
+      // Double check if screenshot exists in current run folder
+      const safeFileName = companyName.replace(/[^a-z0-9]/gi, '_').toLowerCase().slice(0, 50);
+      const localScreenshotExists = fs.existsSync(`${projectScreenshotsDir}/${safeFileName}.png`);
+      
+      // Triple check: OCR Pipeline 'done' folder
+      const ocrDone = isCompanyInOcrDone(projectName, companyName) || isCompanyInOcrDone(fullProjectName, companyName);
+
+      if (alreadyScraped || localScreenshotExists || ocrDone) {
+          if (localScreenshotExists || ocrDone) {
+              // Ensure it's in dedup for next time
+              saveToDedup(projectName, companyName);
+              saveToDedup(fullProjectName, companyName);
+          }
+          logger.ok(`✓ ${companyName} (Already done)`);
+          continue;
+      }
 
       try {
         const [companyPage] = await Promise.all([
@@ -354,7 +493,7 @@ async function scrapeProject(page, projectInfo) {
         ]);
 
         await companyPage.waitForLoadState('domcontentloaded');
-        await companyPage.waitForTimeout(7000); // Increased weight: page is loading and takes a screenshot too fast
+        await companyPage.waitForTimeout(7000);
 
         const safeFileName = companyName.replace(/[^a-z0-9]/gi, '_').toLowerCase().slice(0, 50);
         const screenshotPath = `${projectScreenshotsDir}/${safeFileName}.png`;
@@ -374,13 +513,12 @@ async function scrapeProject(page, projectInfo) {
           website: null,
           screenshot: screenshotPath,
           sourceFile: 'scraper.js',
-          scraped_at: Date.now(), // Changed to numeric timestamp for backend compatibility
+          scraped_at: Date.now(),
           isNew: true,
         };
         companyData.push(record);
-        PREVIOUS_SCRAPES.add(dedupKey);
+        saveToDedup(projectName, companyName); // Real-time save
         
-        // Update live counter immediately
         const currentTotal = (global.scrapedTodayCount || 0) + 1;
         global.scrapedTodayCount = currentTotal;
         telemetry.setCompaniesToday(currentTotal);
@@ -519,64 +657,110 @@ async function main() {
 
     // Main Work Loop
     while (RUN_FOREVER || (Date.now() - START_TIME < MAX_RUNTIME_MS)) {
-      let dayHasErrors = false;
-      
-      // 1. Select the Date Filter (now includes ZIP fetching and pasting)
-      logger.step(`📅 Date Target: today+${dayOffset}`);
       try {
-        await setDateFilter(page, dayOffset);
-      } catch (err) {
-        logger.fail(`❌ Filter set failed: ${err.message}`);
-        dayHasErrors = true;
-      }
-      
-      if (!dayHasErrors) {
-        // 2. Scrape Projects
-        let pageNum = 1;
-        do {
-          logger.step(`📄 Project List Page ${pageNum}`);
-          const projects = await getProjectsOnCurrentPage(page);
+        let dayHasErrors = false;
+        
+        // 1. Select the Date Filter (now includes ZIP fetching and pasting)
+        logger.step(`📅 Date Target: today+${dayOffset}`);
+        try {
+          await setDateFilter(page, dayOffset);
+        } catch (err) {
+          logger.fail(`❌ Filter set failed: ${err.message}`);
+          dayHasErrors = true;
+        }
+        
+        if (!dayHasErrors) {
+          // 2. Analyze date range totals
+          logger.info('⏳ Analyzing date roadmap...');
+          await page.waitForTimeout(3000); // Give PlanHub a moment to update results
           
-          if (projects.length === 0) {
-            logger.info(`ℹ️  No projects found on page ${pageNum}. Checking for subpages...`);
+          let totalPages = 1;
+          let totalProjects = 'unknown';
+          
+          const paginationText = await page.locator('text=/Page \\d+ of \\d+/').first().innerText().catch(() => '');
+          const totalPagesMatch = paginationText.match(/Page \d+ of (\d+)/);
+          if (totalPagesMatch) totalPages = parseInt(totalPagesMatch[1]);
+
+          const resultsText = await page.locator('text=/\\d+-\\d+ of \\d+/').first().innerText().catch(() => '');
+          const resultsMatch = resultsText.match(/of (\d+)/);
+          if (resultsMatch) totalProjects = resultsMatch[1];
+
+          logger.info(`📊 ROADMAP for today+${dayOffset}: Found ${totalProjects} projects across ${totalPages} page(s).`);
+
+          if (totalProjects === '0' || totalProjects === 0) {
+            logger.ok(`📅 Date today+${dayOffset} is empty. Skipping to next date...`);
+            saveProgress(dayOffset);
+            dayOffset++;
+            continue; // Jump to next date immediately
           }
 
-          for (const projectInfo of projects) {
-            const projectName = typeof projectInfo === 'string' ? projectInfo : projectInfo.name;
-            const isLocked = typeof projectInfo === 'object' && !!projectInfo.locked;
-
-            if (isLocked) {
-              logger.info(`Skipping locked project: ${projectName}`);
-              continue;
+          // 3. Scrape Projects
+          let pageNum = 1;
+          let dayActuallyEmpty = false;
+          do {
+            logger.step(`📄 Project List Page ${pageNum}`);
+            const projects = await getProjectsOnCurrentPage(page);
+            
+            if (projects.length === 0) {
+              logger.info(`ℹ️  No projects found on page ${pageNum}.`);
+              if (pageNum === 1) {
+                dayActuallyEmpty = true;
+                break;
+              }
             }
 
-            try {
-              const data = await scrapeProject(page, projectName);
-              allData.push(...data);
-              fs.writeFileSync(`${OUTPUT_DIR}/data.json`, JSON.stringify(allData, null, 2));
-            } catch (err) {
-              logger.fail(`❌ Failed: ${projectName} - ${err.message}`);
-              dayHasErrors = true; // Mark day as failed if a project fails
-              quarantine.push({ project: projectName, error: err.message, dateRange: `today+${dayOffset}` });
-              fs.writeFileSync(`${OUTPUT_DIR}/quarantine.json`, JSON.stringify(quarantine, null, 2));
+            for (const projectInfo of projects) {
+              const projectName = typeof projectInfo === 'string' ? projectInfo : projectInfo.name;
+              const isLocked = typeof projectInfo === 'object' && !!projectInfo.locked;
+
+              if (isLocked) {
+                logger.info(`Skipping locked project: ${projectName}`);
+                continue;
+              }
+
+              // Check if project is already fully done (quick check)
+              const existingFolder = findProjectFolder(projectName);
+              const localCount = countScreenshots(existingFolder);
+              
+              if (localCount > 0) {
+                  logger.info(`   Analyzing: ${projectName} (${localCount} existing screenshots)`);
+              }
+
+              try {
+                const data = await scrapeProject(page, projectName);
+                allData.push(...data);
+                fs.writeFileSync(`${OUTPUT_DIR}/data.json`, JSON.stringify(allData, null, 2));
+              } catch (err) {
+                logger.fail(`❌ Failed: ${projectName} - ${err.message}`);
+                dayHasErrors = true; 
+                quarantine.push({ project: projectName, error: err.message, dateRange: `today+${dayOffset}` });
+                fs.writeFileSync(`${OUTPUT_DIR}/quarantine.json`, JSON.stringify(quarantine, null, 2));
+              }
             }
+            pageNum++;
+          } while (await paginate(page, pageNum) && !dayActuallyEmpty);
+
+          if (dayActuallyEmpty) {
+            logger.ok(`📅 Date today+${dayOffset} had no projects. Skipping...`);
+            saveProgress(dayOffset);
+            dayOffset++;
+            continue;
           }
-          pageNum++;
-        } while (await paginate(page, pageNum));
-      }
+        }
 
-      // ONLY save progress if the ENTIRE day was processed without critical failures
-      if (!dayHasErrors) {
-        saveProgress(dayOffset);
-        dayOffset++;
-        logger.info('🔄 Day complete. Advancing...');
-      } else {
-        logger.fail(`⚠️ Skipping progress save for day +${dayOffset} due to errors. It will be retried next run.`);
-        // Note: We DO NOT dayOffset++ here. The loop will restart on the same day.
-        // To avoid infinite retry loops on a "stubborn" error, we'll add a short wait.
+        // ONLY save progress if the ENTIRE day was processed without critical failures
+        if (!dayHasErrors) {
+          saveProgress(dayOffset);
+          dayOffset++;
+          logger.info('🔄 Day complete. Advancing...');
+        } else {
+          logger.fail(`⚠️ Skipping progress save for day +${dayOffset} due to errors. It will be retried next run.`);
+          await page.waitForTimeout(10000);
+        }
+      } catch (loopErr) {
+        logger.fail(`⚠️ Unexpected Loop Error on day +${dayOffset}: ${loopErr.message}`);
         await page.waitForTimeout(10000);
       }
-      // Proceed immediately to next date without extra delay
     }
 
     logger.ok('🏁 Run complete.');

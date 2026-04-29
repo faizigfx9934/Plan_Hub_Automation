@@ -59,36 +59,32 @@ async function executeCommand(cmd) {
   console.log(`[AGENT] Executing ${type}...`);
   
   if (type === 'STOP' || type === 'RESTART') {
-    console.log('[AGENT] Executing Force Stop...');
-    const myPid = process.pid;
-    // On Windows, taskkill works well. On other OS it might fail, but we target Windows.
-    const cmdKill = `taskkill /F /IM node.exe /FI "PID ne ${myPid}"`;
+    console.log('[AGENT] Executing Force Stop (Scraper Only)...');
     
     try {
       const { execSync } = await import('child_process');
+      // Only kill node processes that have 'scraper.js' in their command line
+      const cmdKill = `powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"Name = 'node.exe'\\" | Where-Object { $_.CommandLine -like '*scraper.js*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"`;
       execSync(cmdKill);
-      console.log('[AGENT] All other Node processes terminated.');
+      console.log('[AGENT] Scraper processes terminated.');
     } catch (e) {
-      console.log('[AGENT] No other Node processes found or already stopped.');
+      console.log('[AGENT] No active scraper processes found to stop.');
     }
     
-    if (currentProcess) {
-      currentProcess.kill('SIGKILL');
-      currentProcess = null;
-    }
+    currentProcess = null;
   }
   
   if (type === 'START' || type === 'RESTART') {
-    if (!currentProcess) {
-      console.log('[AGENT] Triggering run-scraper.bat in AGENT_MODE...');
-      currentProcess = spawn('run-scraper.bat', [], {
-        stdio: 'inherit',
+    if (!(await isScraperRunning())) {
+      console.log('[AGENT] Triggering run-scraper.bat in NEW WINDOW...');
+      // Use 'start' to launch in a separate terminal window
+      currentProcess = spawn('cmd.exe', ['/c', 'start', '"PlanHub Scraper"', 'run-scraper.bat'], {
         shell: true,
         env: { ...process.env, AGENT_MODE: 'true' }
       });
       
       currentProcess.on('exit', (code) => {
-        console.log(`[AGENT] Scraper launcher (bat) exited with code ${code}`);
+        console.log(`[AGENT] Scraper launcher (start command) completed.`);
         currentProcess = null;
       });
     } else {
