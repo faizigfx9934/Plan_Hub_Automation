@@ -8,6 +8,9 @@ import { logger } from './logger.js';
 import * as telemetry from './telemetry.js';
 import { ensureVpn } from './vpn.js';
 
+// Paths
+const OCR_DONE_DIR = path.join(process.cwd(), '..', 'ocr-pipeline', 'done');
+
 // Configuration
 const RUN_FOREVER = process.env.RUN_FOREVER === 'true';
 const MAX_RUNTIME_MS = 8.5 * 60 * 60 * 1000;
@@ -23,7 +26,6 @@ const SCREENSHOTS_DIR = 'screenshots';
 fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
 
 let COMPANY_ZIP_CODE = process.env.PLANHUB_ZIP || null; // Can be pre-seeded by setup script
-const OCR_DONE_DIR = path.join(process.cwd(), '..', 'ocr-pipeline', 'done');
 
 // State Persistence
 function loadProgress() {
@@ -744,14 +746,14 @@ async function main() {
           }
         }
 
-        // ONLY save progress if the ENTIRE day was processed without critical failures
-        if (!dayHasErrors) {
-          saveProgress(dayOffset);
-          dayOffset++;
-          logger.info('🔄 Day complete. Advancing...');
+        // Always advance to next date to avoid infinite loops on stubborn projects
+        saveProgress(dayOffset);
+        dayOffset++;
+        
+        if (dayHasErrors) {
+          logger.info('⚠️ Day complete with some errors. Advancing to avoid loops...');
         } else {
-          logger.fail(`⚠️ Skipping progress save for day +${dayOffset} due to errors. It will be retried next run.`);
-          await page.waitForTimeout(10000);
+          logger.info('🔄 Day complete. Advancing...');
         }
       } catch (loopErr) {
         logger.fail(`⚠️ Unexpected Loop Error on day +${dayOffset}: ${loopErr.message}`);
