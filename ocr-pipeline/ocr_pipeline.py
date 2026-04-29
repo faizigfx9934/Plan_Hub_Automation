@@ -98,19 +98,28 @@ def get_sheet():
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
     ]
-    credentials = Credentials.from_service_account_file(
-        config.CREDENTIALS_FILE,
-        scopes=scopes,
-    )
-    client = gspread.authorize(credentials)
-    spreadsheet = client.open_by_key(config.SHEET_ID)
-    sheet_title = current_sheet_tab_name()
-    try:
-        return spreadsheet.worksheet(sheet_title)
-    except gspread.exceptions.WorksheetNotFound:
-        log.info(f"Worksheet '{sheet_title}' not found; creating it.")
-        worksheet = spreadsheet.add_worksheet(title=sheet_title, rows=1000, cols=20)
-        return worksheet
+    
+    attempt = 0
+    while True:
+        try:
+            attempt += 1
+            credentials = Credentials.from_service_account_file(
+                config.CREDENTIALS_FILE,
+                scopes=scopes,
+            )
+            client = gspread.authorize(credentials)
+            spreadsheet = client.open_by_key(config.SHEET_ID)
+            sheet_title = current_sheet_tab_name()
+            try:
+                return spreadsheet.worksheet(sheet_title)
+            except gspread.exceptions.WorksheetNotFound:
+                log.info(f"Worksheet '{sheet_title}' not found; creating it.")
+                worksheet = spreadsheet.add_worksheet(title=sheet_title, rows=1000, cols=20)
+                return worksheet
+        except Exception as exc:
+            wait_seconds = min(attempt * 10, 60)
+            log.warning(f"Failed to connect to Google Sheets (Attempt {attempt}): {exc}; retrying in {wait_seconds}s")
+            time.sleep(wait_seconds)
 
 
 def format_duration(seconds: float) -> str:
@@ -271,18 +280,21 @@ def append_rows_to_sheet(sheet, rows):
     if not rows:
         return
 
-    for attempt in range(3):
+    attempt = 0
+    while True:
         try:
+            attempt += 1
             with SHEET_WRITE_LOCK:
                 sheet.append_rows(rows, value_input_option="RAW")
             log.info(f"Appended {len(rows)} row(s) to sheet tab '{sheet.title}'")
             return
         except Exception as exc:
-            wait_seconds = (attempt + 1) * 10
-            if attempt == 2:
-                raise
+            # Handle Quota Exceeded (429) specifically with a longer wait
+            is_quota = "429" in str(exc) or "quota" in str(exc).lower()
+            wait_seconds = 60 if is_quota else min(attempt * 10, 300)
+            
             log.warning(
-                f"Google Sheets append failed ({exc}); retrying in {wait_seconds}s"
+                f"Google Sheets append failed (Attempt {attempt}): {exc}; retrying in {wait_seconds}s"
             )
             time.sleep(wait_seconds)
 
