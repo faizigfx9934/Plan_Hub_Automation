@@ -133,10 +133,12 @@ async function setDateFilter(page, dayOffset = 0) {
   // 1. Fetch ZIP from settings
   const zipCode = await getCompanyZipCode(page);
   
-  // 2. Return to project list
-  await page.goto('https://supplier.planhub.com/project/list', { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(2000);
-  await ensureLoggedIn(page);
+  // 2. Return to project list (only if needed)
+  if (!page.url().includes('supplier.planhub.com/project/list')) {
+    await page.goto('https://supplier.planhub.com/project/list', { waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(1000);
+    await ensureLoggedIn(page);
+  }
 
   // 3. Open Search Filters
   await page.waitForSelector('text=/search/i', { timeout: 30000 });
@@ -210,15 +212,14 @@ async function setDateFilter(page, dayOffset = 0) {
 }
 
 async function getProjectsOnCurrentPage(page) {
-  logger.info('⏳ Waiting for project list...');
-  await page.waitForSelector('table tr', { timeout: 5000 }).catch(() => {});
-  await page.waitForTimeout(1000); 
+  logger.info('⏳ Checking list...');
+  await page.waitForSelector('table tr', { timeout: 3000 }).catch(() => {});
   
   let rows = await page.locator('table tbody tr').all();
   
-  // Quick re-check if empty (2s instead of 5s)
+  // Immediate re-check if empty (only 1s wait)
   if (rows.length === 0) {
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(1000);
     rows = await page.locator('table tbody tr').all();
   }
 
