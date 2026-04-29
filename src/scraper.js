@@ -344,17 +344,25 @@ async function scrapeProject(page, projectInfo) {
 
   // 3. Click on "Subcontractors" tab
   logger.info('   Opening Subcontractors tab...');
-  const subTab = projectPage.locator('button, .mat-tab-label, .mat-mdc-tab').filter({ hasText: /^Subcontractors$/i }).first();
-  await subTab.waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
-  await subTab.evaluate(el => el.scrollIntoView({ block: 'center' })).catch(() => {});
-  await subTab.click().catch(async () => {
-    await subTab.evaluate(el => el.click());
+  // Ensure we are at the top so the tab isn't hidden by a sticky header
+  await projectPage.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
+  await projectPage.waitForTimeout(1000);
+
+  const subTab = projectPage.locator('button, .mat-tab-label, .mat-mdc-tab, [role="tab"]').filter({ hasText: /Subcontractors/i }).first();
+  await subTab.waitFor({ state: 'attached', timeout: 10000 }).catch(() => {});
+  await subTab.scrollIntoViewIfNeeded().catch(() => {});
+  
+  // Try normal click, then force click, then JS click
+  await subTab.click({ timeout: 5000 }).catch(async () => {
+    await subTab.click({ force: true, timeout: 5000 }).catch(async () => {
+      await subTab.evaluate(el => el.click());
+    });
   });
-  await projectPage.waitForTimeout(3000);
+  await projectPage.waitForTimeout(2000);
 
   // 4. Scroll internal containers to trigger loading (Crucial for subprojects list)
   await projectPage.evaluate(() => {
-    const scrollables = document.querySelectorAll('[class*="scroll"], [class*="list"], .mat-dialog-content, [class*="container"]');
+    const scrollables = document.querySelectorAll('[class*="scroll"], [class*="list"], .mat-dialog-content, [class*="container"], mat-tab-body');
     scrollables.forEach(el => {
       if (el.scrollHeight > el.clientHeight) el.scrollTop = el.scrollHeight;
     });
@@ -371,12 +379,6 @@ async function scrapeProject(page, projectInfo) {
     await waitWhileFleetPaused(projectPage);
     logger.step(`📄 Subcontractors page ${subPage}/${totalPages}`);
     
-    await projectPage.evaluate(() => {
-      const scrollables = document.querySelectorAll('[class*="scroll"], [class*="list"], mat-dialog-content');
-      scrollables.forEach(el => { el.scrollTop = el.scrollHeight; });
-    });
-    await projectPage.waitForTimeout(1500);
-    
     const companiesOnThisPage = await collectCompanyEntries(projectPage);
     logger.info(`   Found ${companiesOnThisPage.length} companies on page ${subPage}`);
     
@@ -388,7 +390,7 @@ async function scrapeProject(page, projectInfo) {
       try {
         logger.info(`Opening ${companyName}...`);
         
-        // Strategy 1: Try direct URL extraction (faster, avoids timeouts)
+        // Strategy 1: Try direct URL extraction (fastest)
         const escapedName = companyName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const anchor = projectPage.locator('a').filter({ hasText: new RegExp(`^\\s*${escapedName}(\\s|$)`, 'i') }).first();
         const href = await anchor.getAttribute('href').catch(() => null);
@@ -407,7 +409,9 @@ async function scrapeProject(page, projectInfo) {
         }
 
         await companyPage.waitForLoadState('domcontentloaded');
-        await companyPage.waitForTimeout(5000); 
+        // Smarter wait: wait for content instead of fixed 5s
+        await companyPage.waitForSelector('.profile-container, .company-profile, body', { timeout: 10000 }).catch(() => {});
+        await companyPage.waitForTimeout(2000); // 2s buffer is enough if content is there
 
         const safeFileName = companyName.replace(/[^a-z0-9]/gi, '_').toLowerCase().slice(0, 50);
         const screenshotPath = `${projectScreenshotsDir}/${safeFileName}.png`;
