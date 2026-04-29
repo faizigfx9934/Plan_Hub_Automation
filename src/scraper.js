@@ -6,6 +6,7 @@ import 'dotenv/config';
 import { SEL } from './selectors.js';
 import { logger } from './logger.js';
 import * as telemetry from './telemetry.js';
+import { ensureVpn } from './vpn.js';
 
 // Configuration
 const RUN_FOREVER = process.env.RUN_FOREVER === 'true';
@@ -297,6 +298,17 @@ async function paginate(page) {
 }
 
 async function main() {
+  logger.step('PlanHub Scraper Pro');
+  
+  // 1. Verify VPN Connectivity
+  if (!ensureVpn()) {
+    logger.fail('FATAL: VPN is required but disconnected. Aborting run.');
+    if (telemetry.isEnabled()) {
+       await telemetry.reportError('VPN Disconnected');
+    }
+    return;
+  }
+
   const browser = await chromium.launch({ headless: false, slowMo: 50 });
   const sessionPath = 'session.json';
   const contextOpts = { viewport: { width: 1920, height: 1080 } };
