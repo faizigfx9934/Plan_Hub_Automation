@@ -1,10 +1,14 @@
 import { execSync } from 'child_process';
 import { logger } from './logger.js';
+import fs from 'fs';
+
+const PIACTL_PATH = '"C:\\Program Files\\Private Internet Access\\piactl.exe"';
 
 export function checkVpn() {
   try {
-    // Check if piactl is available and the status is 'Connected'
-    const status = execSync('piactl get connectionstate', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    // Try absolute path first, then fallback to just 'piactl'
+    const cmd = fs.existsSync('C:\\Program Files\\Private Internet Access\\piactl.exe') ? PIACTL_PATH : 'piactl';
+    const status = execSync(`${cmd} get connectionstate`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
     
     if (status === 'Connected') {
       logger.ok('VPN Status: Connected (PIA)');
@@ -14,16 +18,14 @@ export function checkVpn() {
       return false;
     }
   } catch (e) {
-    // If piactl is not found or fails, we fallback to checking if a VPN interface exists
+    // Fallback: check if a VPN network interface is UP
     try {
-      const interfaces = execSync('powershell -Command "Get-NetAdapter | Where-Object { $_.Status -eq \'Up\' -and ($_.InterfaceDescription -like \'*Private Internet Access*\' -or $_.InterfaceDescription -like \'*WireGuard*\') }"').toString();
+      const interfaces = execSync('powershell -NoProfile -Command "Get-NetAdapter | Where-Object { $_.Status -eq \'Up\' -and ($_.InterfaceDescription -like \'*Private Internet Access*\' -or $_.InterfaceDescription -like \'*WireGuard*\') }"').toString();
       if (interfaces.trim()) {
         logger.ok('VPN Status: Connected (Detected via Network Adapter)');
         return true;
       }
-    } catch (err) {
-      // Final fallback - check public IP? No, let's stick to local checks for speed.
-    }
+    } catch (err) { }
     
     logger.fail('VPN Status: DISCONNECTED');
     return false;
@@ -32,13 +34,14 @@ export function checkVpn() {
 
 export function ensureVpn() {
   if (!checkVpn()) {
-    logger.step('Attempting to connect VPN via piactl...');
+    logger.step('Attempting to connect VPN...');
     try {
-      execSync('piactl connect');
+      const cmd = fs.existsSync('C:\\Program Files\\Private Internet Access\\piactl.exe') ? PIACTL_PATH : 'piactl';
+      execSync(`${cmd} connect`);
       // Wait for connection
-      for (let i = 0; i < 10; i++) {
+      for (let i = 0; i < 15; i++) {
         if (checkVpn()) return true;
-        execSync('powershell -Command "Start-Sleep -Seconds 2"');
+        execSync('powershell -NoProfile -Command "Start-Sleep -Seconds 2"');
       }
     } catch (e) {
       logger.fail('Failed to trigger VPN connection.');
