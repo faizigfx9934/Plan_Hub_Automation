@@ -576,8 +576,7 @@ async function main() {
         // To avoid infinite retry loops on a "stubborn" error, we'll add a short wait.
         await page.waitForTimeout(10000);
       }
-      
-      await page.waitForTimeout(5000);
+      // Proceed immediately to next date without extra delay
     }
 
     logger.ok('🏁 Run complete.');
