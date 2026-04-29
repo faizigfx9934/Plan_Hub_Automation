@@ -697,7 +697,6 @@ def init_ocr_worker():
     WORKER_OCR = PaddleOCR(
         use_angle_cls=True,
         lang="en",
-        show_log=False,
         use_gpu=False,
         det_db_score_mode="slow",
     )
