@@ -106,16 +106,25 @@ async function setupCompanyProfile(page) {
   await page.goto('https://supplier.planhub.com/settings/company', { timeout: 60000, waitUntil: 'domcontentloaded' });
   await ensureLoggedIn(page, 'https://supplier.planhub.com/settings/company');
   
-  const zip = process.env.PLANHUB_ZIP || '76180';
+  const zip = process.env.PLANHUB_ZIP;
+  if (!zip) {
+    logger.info('No PLANHUB_ZIP found in .env, skipping profile update.');
+    return;
+  }
+  
   logger.info(`Updating region to ZIP: ${zip}`);
 
   // Using the workflow you provided
   try {
-    await page.locator('div').filter({ hasText: /^Zip Code \*$/ }).nth(1).click();
+    const zipContainer = page.locator('div').filter({ hasText: /^Zip Code \*$/ }).nth(1);
+    await zipContainer.waitFor({ state: 'visible', timeout: 10000 });
+    await zipContainer.click();
+    
     const zipInput = page.getByRole('searchbox', { name: 'Zip Code' });
     await zipInput.click();
     await zipInput.fill(zip);
   } catch (err) {
+    logger.info('Primary zip selector failed, trying fallback...');
     // Fallback to qa-locator seen in inspector
     await page.locator('[qa-locator="input-zip-code"]').fill(zip);
   }
@@ -126,6 +135,10 @@ async function setupCompanyProfile(page) {
   await saveBtn.click();
   await page.waitForTimeout(3000);
   logger.ok(`Company profile updated with Zip: ${zip}`);
+
+  // Return to projects list
+  await page.goto('https://supplier.planhub.com/project/list', { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(2000);
 }
 
 async function setDateFilter(page, dayOffset = 0) {
@@ -375,9 +388,6 @@ async function main() {
     stopHeartbeat = telemetry.startHeartbeat();
     telemetry.setStatus('running');
 
-    // NEW: Setup Company Profile before starting
-    await setupCompanyProfile(page);
-
     // Load Resume Progress or Start Offset
     const resumeOffset = loadProgress();
     const configOffset = parseInt(process.env.START_DATE_OFFSET ?? '4', 10);
@@ -388,9 +398,14 @@ async function main() {
 
     // Main Work Loop
     while (RUN_FOREVER || (Date.now() - START_TIME < MAX_RUNTIME_MS)) {
+      // 1. Select the Date Filter
       logger.step(`📅 Date Target: today+${dayOffset}`);
       await setDateFilter(page, dayOffset);
       
+      // 2. Update Company Profile Zip (from ENV)
+      await setupCompanyProfile(page);
+      
+      // 3. Do the rest (Scrape Projects)
       let pageNum = 1;
       do {
         logger.step(`📄 Project List Page ${pageNum}`);
