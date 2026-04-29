@@ -8,10 +8,6 @@ import { logger } from './logger.js';
 import * as telemetry from './telemetry.js';
 import { ensureVpn } from './vpn.js';
 
-// Paths
-global.OCR_DONE_DIR = path.join(process.cwd(), '..', 'ocr-pipeline', 'done');
-const OCR_DONE_DIR = global.OCR_DONE_DIR;
-
 // Configuration
 const RUN_FOREVER = process.env.RUN_FOREVER === 'true';
 const MAX_RUNTIME_MS = 8.5 * 60 * 60 * 1000;
@@ -27,6 +23,7 @@ const SCREENSHOTS_DIR = 'screenshots';
 fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
 
 let COMPANY_ZIP_CODE = process.env.PLANHUB_ZIP || null; // Can be pre-seeded by setup script
+const OCR_DONE_DIR = path.join(process.cwd(), '..', 'ocr-pipeline', 'done');
 
 // State Persistence
 function loadProgress() {
@@ -38,6 +35,13 @@ function loadProgress() {
         const today = new Date();
         const diffDays = Math.floor((today - savedDate) / (1000 * 60 * 60 * 24));
         const resumeOffset = data.dayOffset - diffDays;
+        
+        // Safety Cap: If offset is suspicious (> 60 days) or negative, reset to default
+        if (resumeOffset > 60 || resumeOffset < 0) {
+          logger.warning(`📈 Offset ${resumeOffset} is outside safe range (0-60). Resetting to default.`);
+          return null;
+        }
+
         logger.info(`📈 Resuming from progress.json (Saved Offset: ${data.dayOffset}, Adjusted: ${resumeOffset})`);
         return resumeOffset;
       }
@@ -74,11 +78,10 @@ function findProjectFolder(projectName) {
   }
 
   // 2. Search in OCR done dir
-  const ocrPath = global.OCR_DONE_DIR || path.join(process.cwd(), '..', 'ocr-pipeline', 'done');
-  if (fs.existsSync(ocrPath)) {
-    const folders = fs.readdirSync(ocrPath);
+  if (fs.existsSync(OCR_DONE_DIR)) {
+    const folders = fs.readdirSync(OCR_DONE_DIR);
     const match = folders.find(f => f === safeProjectName || f.startsWith(`${safeProjectName} (`));
-    if (match) return path.join(ocrPath, match);
+    if (match) return path.join(OCR_DONE_DIR, match);
   }
 
   return null;
@@ -748,22 +751,17 @@ async function main() {
           }
         }
 
-        // Always advance to next date to avoid infinite loops on stubborn projects
-        dayOffset++;
-        saveProgress(dayOffset);
-        
-        if (dayHasErrors) {
-          logger.info('⚠️ Day complete with some errors. Advancing to avoid loops...');
-        } else {
+        // ONLY save progress if the ENTIRE day was processed without critical failures
+        if (!dayHasErrors) {
+          saveProgress(dayOffset);
+          dayOffset++;
           logger.info('🔄 Day complete. Advancing...');
+        } else {
+          logger.fail(`⚠️ Skipping progress save for day +${dayOffset} due to errors. It will be retried next run.`);
+          await page.waitForTimeout(10000);
         }
       } catch (loopErr) {
         logger.fail(`⚠️ Unexpected Loop Error on day +${dayOffset}: ${loopErr.message}`);
-        
-        // Loop Breaker: Always advance even on unexpected crashes to avoid getting stuck forever
-        logger.info('🔄 Force-advancing to next date to break the loop...');
-        dayOffset++;
-        saveProgress(dayOffset);
         await page.waitForTimeout(10000);
       }
     }
