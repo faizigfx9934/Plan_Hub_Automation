@@ -101,6 +101,33 @@ async function ensureLoggedIn(page, returnUrl = 'https://supplier.planhub.com/pr
   return true;
 }
 
+async function setupCompanyProfile(page) {
+  logger.step('Setting up Company Profile (Zip Code)');
+  await page.goto('https://supplier.planhub.com/settings/company', { timeout: 60000, waitUntil: 'domcontentloaded' });
+  await ensureLoggedIn(page, 'https://supplier.planhub.com/settings/company');
+  
+  const zip = process.env.PLANHUB_ZIP || '76180';
+  logger.info(`Updating region to ZIP: ${zip}`);
+
+  // Using the workflow you provided
+  try {
+    await page.locator('div').filter({ hasText: /^Zip Code \*$/ }).nth(1).click();
+    const zipInput = page.getByRole('searchbox', { name: 'Zip Code' });
+    await zipInput.click();
+    await zipInput.fill(zip);
+  } catch (err) {
+    // Fallback to qa-locator seen in inspector
+    await page.locator('[qa-locator="input-zip-code"]').fill(zip);
+  }
+  
+  // Save Changes
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  const saveBtn = page.getByRole('button', { name: /save|update/i }).first();
+  await saveBtn.click();
+  await page.waitForTimeout(3000);
+  logger.ok(`Company profile updated with Zip: ${zip}`);
+}
+
 async function setDateFilter(page, dayOffset = 0) {
   logger.step(`Setting date filter: today+${dayOffset}`);
   await page.goto('https://supplier.planhub.com/project/list', { timeout: 60000, waitUntil: 'domcontentloaded' });
@@ -347,6 +374,9 @@ async function main() {
     // Initialize Telemetry
     stopHeartbeat = telemetry.startHeartbeat();
     telemetry.setStatus('running');
+
+    // NEW: Setup Company Profile before starting
+    await setupCompanyProfile(page);
 
     // Load Resume Progress or Start Offset
     const resumeOffset = loadProgress();
