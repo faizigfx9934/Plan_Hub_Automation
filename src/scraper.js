@@ -283,14 +283,24 @@ async function waitWhileFleetPaused(page) {
 }
 
 async function collectCompanyEntries(projectPage) {
-  const companyElements = await projectPage.locator(SEL.company.row).all();
-  const companyNames = [];
-  for (const companyElement of companyElements) {
-    const name = await companyElement.innerText().catch(() => '');
-    if (!name.trim()) continue;
-    companyNames.push(name.trim());
+  const companyRows = await projectPage.locator('table tbody tr').all();
+  const entries = [];
+  for (const row of companyRows) {
+    // Find the first anchor that looks like a company link
+    const anchor = row.locator('a[href*="company"], a[href*="profile"]').first();
+    const nameText = await row.innerText().catch(() => '');
+    
+    // If we can't find a specialized anchor, use the first link in the row
+    const targetAnchor = await anchor.count() > 0 ? anchor : row.locator('a').first();
+    
+    const name = await targetAnchor.innerText().catch(() => '');
+    const href = await targetAnchor.getAttribute('href').catch(() => null);
+    
+    if (name.trim()) {
+      entries.push({ name: name.trim(), href });
+    }
   }
-  return companyNames;
+  return entries;
 }
 
 async function scrapeProject(page, projectInfo) {
@@ -379,10 +389,11 @@ async function scrapeProject(page, projectInfo) {
     await waitWhileFleetPaused(projectPage);
     logger.step(`📄 Subcontractors page ${subPage}/${totalPages}`);
     
-    const companiesOnThisPage = await collectCompanyEntries(projectPage);
-    logger.info(`   Found ${companiesOnThisPage.length} companies on page ${subPage}`);
+    const entriesOnThisPage = await collectCompanyEntries(projectPage);
+    logger.info(`   Found ${entriesOnThisPage.length} companies on page ${subPage}`);
     
-    for (const companyName of companiesOnThisPage) {
+    for (const entry of entriesOnThisPage) {
+      const companyName = entry.name;
       const dedupKey = `${projectName}|||${companyName}`;
       if (PREVIOUS_SCRAPES.has(dedupKey)) continue;
 
@@ -390,17 +401,13 @@ async function scrapeProject(page, projectInfo) {
       try {
         logger.info(`Opening ${companyName}...`);
         
-        // Strategy 1: Try direct URL extraction (fastest)
-        const escapedName = companyName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const anchor = projectPage.locator('a').filter({ hasText: new RegExp(`^\\s*${escapedName}(\\s|$)`, 'i') }).first();
-        const href = await anchor.getAttribute('href').catch(() => null);
-
-        if (href) {
-          const absoluteUrl = href.startsWith('http') ? href : new URL(href, projectPage.url()).href;
+        if (entry.href) {
+          // Direct navigation: FASTEST
+          const absoluteUrl = entry.href.startsWith('http') ? entry.href : new URL(entry.href, projectPage.url()).href;
           companyPage = await page.context().newPage();
           await companyPage.goto(absoluteUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
         } else {
-          // Strategy 2: Ctrl+Click fallback (Reduced timeout to 5s to avoid long waits)
+          // Absolute fallback if no href was found in the row
           const [openedPage] = await Promise.all([
             page.context().waitForEvent('page', { timeout: 5000 }),
             projectPage.getByText(companyName).first().click({ modifiers: ['ControlOrMeta'] }),
@@ -410,7 +417,7 @@ async function scrapeProject(page, projectInfo) {
 
         // Smarter wait: wait for content instead of fixed duration
         await companyPage.waitForSelector('.profile-container, .company-profile, body', { timeout: 7000 }).catch(() => {});
-        await companyPage.waitForTimeout(800); // Trimmed to 800ms for speed
+        await companyPage.waitForTimeout(800); 
 
         const safeFileName = companyName.replace(/[^a-z0-9]/gi, '_').toLowerCase().slice(0, 50);
         const screenshotPath = `${projectScreenshotsDir}/${safeFileName}.png`;
