@@ -210,16 +210,15 @@ async function setDateFilter(page, dayOffset = 0) {
 }
 
 async function getProjectsOnCurrentPage(page) {
-  logger.info('⏳ Waiting for project list to stabilize...');
-  await page.waitForSelector('table tr', { timeout: 15000 }).catch(() => {});
-  await page.waitForTimeout(5000); // Added more weight to load the project section
+  logger.info('⏳ Waiting for project list...');
+  await page.waitForSelector('table tr', { timeout: 5000 }).catch(() => {});
+  await page.waitForTimeout(1000); 
   
   let rows = await page.locator('table tbody tr').all();
   
-  // Tweak: If no projects found, wait another 5s and try one last time (PlanHub lag protection)
+  // Quick re-check if empty (2s instead of 5s)
   if (rows.length === 0) {
-    logger.info('   Empty list detected. Giving PlanHub 5 more seconds to load...');
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(2000);
     rows = await page.locator('table tbody tr').all();
   }
 
@@ -538,7 +537,8 @@ async function main() {
           const projects = await getProjectsOnCurrentPage(page);
           
           if (projects.length === 0) {
-            logger.info(`ℹ️  No projects found on page ${pageNum}. Checking for subpages...`);
+            logger.info(`ℹ️  No projects found on page ${pageNum}. Advancing date...`);
+            break; // Exit the page loop immediately to change the date
           }
 
           for (const projectInfo of projects) {
