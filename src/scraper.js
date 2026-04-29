@@ -487,7 +487,7 @@ async function main() {
     logger.info('Launching Browser...');
     const browser = await chromium.launch({ headless: false, slowMo: 50 });
     const sessionPath = 'session.json';
-    const contextOpts = { viewport: { width: 1920, height: 1080 } };
+    const contextOpts = { viewport: null }; // Remove fixed viewport for smaller screens
     if (fs.existsSync(sessionPath)) contextOpts.storageState = sessionPath;
 
     const context = await browser.newContext(contextOpts);
