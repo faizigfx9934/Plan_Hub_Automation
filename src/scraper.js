@@ -221,15 +221,19 @@ async function setDateFilter(page, dayOffset = 0) {
 }
 
 async function getProjectsOnCurrentPage(page) {
-  logger.info('⏳ Checking list...');
-  // Quick check for "No results found" text anywhere in the list area
+  logger.info('⏳ Waiting for project list to refresh...');
+  // Wait for any previous table content to be replaced or the loading state to finish
+  await page.waitForTimeout(3000); 
+  
+  await page.waitForSelector('table tr', { timeout: 10000 }).catch(() => {});
+  
+  // Check for empty list message ONLY after we've given it time to load
   const emptyMessage = await page.locator('text=/No results found|Nothing found/i').first().isVisible().catch(() => false);
   if (emptyMessage) {
-    logger.info('   "No results found" detected immediately.');
+    logger.info('   Confirmed: No projects found for this filter.');
     return [];
   }
 
-  await page.waitForSelector('table tr', { timeout: 3000 }).catch(() => {});
   let rows = await page.locator('table tbody tr').all();
   logger.info(`   Found ${rows.length} raw rows.`);
   
