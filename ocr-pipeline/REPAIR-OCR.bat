@@ -27,8 +27,10 @@ if %errorLevel% neq 0 (
 )
 
 REM 4. Install dependencies with no cache
-echo [+] Installing dependencies (this may take a few minutes)...
+echo [+] Installing critical modules...
 venv\Scripts\python.exe -m pip install --upgrade pip
+venv\Scripts\python.exe -m pip install gspread google-auth --no-cache-dir
+echo [+] Installing full requirements (this may take a few minutes)...
 venv\Scripts\python.exe -m pip install -r requirements.txt --no-cache-dir
 
 REM 5. Verify
