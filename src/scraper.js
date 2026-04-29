@@ -20,10 +20,7 @@ fs.mkdirSync(`${OUTPUT_DIR}`, { recursive: true });
 const SCREENSHOTS_DIR = 'screenshots';
 fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
 
-const DATA_DIR = 'data';
-fs.mkdirSync(DATA_DIR, { recursive: true });
-
-let COMPANY_ZIP_CODE = null;
+let COMPANY_ZIP_CODE = process.env.PLANHUB_ZIP || null; // Can be pre-seeded by setup script
 
 // State Persistence
 function loadProgress() {
@@ -50,7 +47,6 @@ function saveProgress(offset) {
     dayOffset: offset,
     timestamp: new Date().toISOString()
   };
-  fs.mkdirSync(path.dirname(PROGRESS_FILE), { recursive: true });
   fs.writeFileSync(PROGRESS_FILE, JSON.stringify(data, null, 2));
   logger.ok(`💾 Progress saved: dayOffset ${offset}`);
 }
@@ -137,31 +133,25 @@ async function setDateFilter(page, dayOffset = 0) {
   // 1. Fetch ZIP from settings
   const zipCode = await getCompanyZipCode(page);
   
-  // 2. Return to project list (FORCE reload for clean state between days)
+  // 2. Return to project list
   await page.goto('https://supplier.planhub.com/project/list', { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(1000);
+  await page.waitForTimeout(2000);
   await ensureLoggedIn(page);
 
   // 3. Open Search Filters
-  logger.info('   Opening search filters...');
-  const searchBtn = page.getByLabel(/Search \(\d+\)/).getByRole('button').filter({ hasText: /^$/ }).first();
-  await searchBtn.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
-  await searchBtn.click().catch(async () => {
-     // Fallback: search by icon if label fails
-     await page.locator('button:has(.mat-icon:text("search"))').first().click().catch(() => {});
-  });
-  await page.waitForTimeout(500);
+  await page.waitForSelector('text=/search/i', { timeout: 30000 });
+  await page.getByLabel('Search (2)').getByRole('button').filter({ hasText: /^$/ }).click();
+  await page.waitForTimeout(1000);
 
   // 4. Navigate to "Custom" tab in date carousel
-  logger.info('   Selecting "Custom" date tab...');
   for (let i = 0; i < 8; i++) {
     const customTab = page.getByText('Custom', { exact: true });
     if (await customTab.isVisible().catch(() => false)) break;
     await page.locator(SEL.dateFilter.paginateArrow).click().catch(() => {});
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(300);
   }
   await page.getByText('Custom').click();
-  await page.waitForTimeout(1000);
+  await page.waitForTimeout(1500);
 
   // 5. Set Date (today + dayOffset)
   const today = new Date();
@@ -203,12 +193,11 @@ async function setDateFilter(page, dayOffset = 0) {
   await page.waitForTimeout(2000);
 
   // 6. Paste ZIP Code from account settings
-  logger.info(`   Applying ZIP filter: ${zipCode}`);
   const zipFilter = page.getByRole(SEL.account.zipCodeInput.role, { name: SEL.account.zipCodeInput.name }).first();
   await zipFilter.click();
   await zipFilter.fill(zipCode);
   await zipFilter.press('Tab');
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(800);
 
   // 7. Set Distance (200 miles)
   const distanceField = page.locator(SEL.dateFilter.distanceField).filter({
@@ -221,25 +210,16 @@ async function setDateFilter(page, dayOffset = 0) {
 }
 
 async function getProjectsOnCurrentPage(page) {
-  logger.info('⏳ Waiting for project list to refresh...');
-  // Wait for any previous table content to be replaced or the loading state to finish
-  await page.waitForTimeout(3000); 
+  logger.info('⏳ Waiting for project list to stabilize...');
+  await page.waitForSelector('table tr', { timeout: 15000 }).catch(() => {});
+  await page.waitForTimeout(5000); // Added more weight to load the project section
   
-  await page.waitForSelector('table tr', { timeout: 10000 }).catch(() => {});
-  
-  // Check for empty list message ONLY after we've given it time to load
-  const emptyMessage = await page.locator('text=/No results found|Nothing found/i').first().isVisible().catch(() => false);
-  if (emptyMessage) {
-    logger.info('   Confirmed: No projects found for this filter.');
-    return [];
-  }
-
   let rows = await page.locator('table tbody tr').all();
-  logger.info(`   Found ${rows.length} raw rows.`);
   
-  // Immediate re-check if empty (only 1s wait)
+  // Tweak: If no projects found, wait another 5s and try one last time (PlanHub lag protection)
   if (rows.length === 0) {
-    await page.waitForTimeout(1000);
+    logger.info('   Empty list detected. Giving PlanHub 5 more seconds to load...');
+    await page.waitForTimeout(5000);
     rows = await page.locator('table tbody tr').all();
   }
 
@@ -283,24 +263,14 @@ async function waitWhileFleetPaused(page) {
 }
 
 async function collectCompanyEntries(projectPage) {
-  const companyRows = await projectPage.locator('table tbody tr').all();
-  const entries = [];
-  for (const row of companyRows) {
-    // Find the first anchor that looks like a company link
-    const anchor = row.locator('a[href*="company"], a[href*="profile"]').first();
-    const nameText = await row.innerText().catch(() => '');
-    
-    // If we can't find a specialized anchor, use the first link in the row
-    const targetAnchor = await anchor.count() > 0 ? anchor : row.locator('a').first();
-    
-    const name = await targetAnchor.innerText().catch(() => '');
-    const href = await targetAnchor.getAttribute('href').catch(() => null);
-    
-    if (name.trim()) {
-      entries.push({ name: name.trim(), href });
-    }
+  const companyElements = await projectPage.locator(SEL.company.row).all();
+  const companyNames = [];
+  for (const companyElement of companyElements) {
+    const name = await companyElement.innerText().catch(() => '');
+    if (!name.trim()) continue;
+    companyNames.push(name.trim());
   }
-  return entries;
+  return companyNames;
 }
 
 async function scrapeProject(page, projectInfo) {
@@ -352,32 +322,8 @@ async function scrapeProject(page, projectInfo) {
   const projectScreenshotsDir = path.join(SCREENSHOTS_DIR, projectFolderName);
   fs.mkdirSync(projectScreenshotsDir, { recursive: true });
 
-  // 3. Click on "Subcontractors" tab
-  logger.info('   Opening Subcontractors tab...');
-  // Ensure we are at the top so the tab isn't hidden by a sticky header
-  await projectPage.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
-  await projectPage.waitForTimeout(1000);
-
-  const subTab = projectPage.locator('button, .mat-tab-label, .mat-mdc-tab, [role="tab"]').filter({ hasText: /Subcontractors/i }).first();
-  await subTab.waitFor({ state: 'attached', timeout: 10000 }).catch(() => {});
-  await subTab.scrollIntoViewIfNeeded().catch(() => {});
-  
-  await subTab.click({ force: true }).catch(async () => {
-    await subTab.evaluate(el => el.click());
-  });
-  
-  // User Requested: Wait 5 seconds after entering subcontractors page
-  logger.info('   Waiting 5s for list to settle...');
-  await projectPage.waitForTimeout(5000);
-
-  // 4. Scroll internal containers to trigger loading (Crucial for subprojects list)
-  await projectPage.evaluate(() => {
-    const scrollables = document.querySelectorAll('[class*="scroll"], [class*="list"], .mat-dialog-content, [class*="container"], mat-tab-body');
-    scrollables.forEach(el => {
-      if (el.scrollHeight > el.clientHeight) el.scrollTop = el.scrollHeight;
-    });
-  });
-  await projectPage.waitForTimeout(1500);
+  await projectPage.getByRole('button', { name: 'Subcontractors' }).click();
+  await projectPage.waitForTimeout(2500);
 
   let totalPages = 1;
   const pageText = await projectPage.locator('text=/Page \\d+ of \\d+/').first().innerText().catch(() => '');
@@ -389,39 +335,33 @@ async function scrapeProject(page, projectInfo) {
     await waitWhileFleetPaused(projectPage);
     logger.step(`📄 Subcontractors page ${subPage}/${totalPages}`);
     
-    const entriesOnThisPage = await collectCompanyEntries(projectPage);
-    logger.info(`   Found ${entriesOnThisPage.length} companies on page ${subPage}`);
+    await projectPage.evaluate(() => {
+      const scrollables = document.querySelectorAll('[class*="scroll"], [class*="list"], mat-dialog-content');
+      scrollables.forEach(el => { el.scrollTop = el.scrollHeight; });
+    });
+    await projectPage.waitForTimeout(1500);
     
-    for (const entry of entriesOnThisPage) {
-      const companyName = entry.name;
+    const companiesOnThisPage = await collectCompanyEntries(projectPage);
+    
+    for (const companyName of companiesOnThisPage) {
       const dedupKey = `${projectName}|||${companyName}`;
       if (PREVIOUS_SCRAPES.has(dedupKey)) continue;
 
-      let companyPage = null;
       try {
-        logger.info(`Opening ${companyName}...`);
-        
-        if (entry.href) {
-          // Direct navigation: FASTEST
-          const absoluteUrl = entry.href.startsWith('http') ? entry.href : new URL(entry.href, projectPage.url()).href;
-          companyPage = await page.context().newPage();
-          await companyPage.goto(absoluteUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
-        } else {
-          // Absolute fallback if no href was found in the row
-          const [openedPage] = await Promise.all([
-            page.context().waitForEvent('page', { timeout: 5000 }),
-            projectPage.getByText(companyName).first().click({ modifiers: ['ControlOrMeta'] }),
-          ]);
-          companyPage = openedPage;
-        }
+        const [companyPage] = await Promise.all([
+          page.context().waitForEvent('page', { timeout: 15000 }),
+          projectPage.getByText(companyName).first().click({ modifiers: ['ControlOrMeta'] }),
+        ]);
 
-        // User Requested: Wait 2-3 seconds before screenshot
-        await companyPage.waitForTimeout(2500); 
+        await companyPage.waitForLoadState('domcontentloaded');
+        await companyPage.waitForTimeout(7000); // Increased weight: page is loading and takes a screenshot too fast
 
         const safeFileName = companyName.replace(/[^a-z0-9]/gi, '_').toLowerCase().slice(0, 50);
         const screenshotPath = `${projectScreenshotsDir}/${safeFileName}.png`;
         
         await companyPage.screenshot({ path: screenshotPath, fullPage: true });
+        
+        logger.setContext(`🏢 Scraping: ${companyName}`);
         
         const bodyText = await companyPage.locator('body').innerText().catch(() => '');
         const record = {
@@ -434,12 +374,13 @@ async function scrapeProject(page, projectInfo) {
           website: null,
           screenshot: screenshotPath,
           sourceFile: 'scraper.js',
-          scraped_at: Date.now(),
+          scraped_at: Date.now(), // Changed to numeric timestamp for backend compatibility
           isNew: true,
         };
         companyData.push(record);
         PREVIOUS_SCRAPES.add(dedupKey);
         
+        // Update live counter immediately
         const currentTotal = (global.scrapedTodayCount || 0) + 1;
         global.scrapedTodayCount = currentTotal;
         telemetry.setCompaniesToday(currentTotal);
@@ -447,12 +388,8 @@ async function scrapeProject(page, projectInfo) {
         await companyPage.close();
         logger.ok(`✓ ${companyName}`);
         telemetry.reportCompanies([record]);
-        
-        // User Requested: Wait 3 seconds between companies
-        await projectPage.waitForTimeout(3000);
       } catch (err) {
         logger.fail(`Failed ${companyName}: ${err.message}`);
-        if (companyPage) await companyPage.close().catch(() => {});
       }
     }
     
@@ -573,7 +510,7 @@ async function main() {
 
     // Load Resume Progress or Start Offset
     const resumeOffset = loadProgress();
-    const configOffset = 4; // User requested 4-day gap instead of 8
+    const configOffset = parseInt(process.env.START_DATE_OFFSET || '4', 10);
     let dayOffset = resumeOffset !== null ? resumeOffset : configOffset;
 
     const allData = [];
@@ -601,8 +538,7 @@ async function main() {
           const projects = await getProjectsOnCurrentPage(page);
           
           if (projects.length === 0) {
-            logger.info(`ℹ️  No projects found on page ${pageNum}. Advancing date...`);
-            break; // Exit the page loop immediately to change the date
+            logger.info(`ℹ️  No projects found on page ${pageNum}. Checking for subpages...`);
           }
 
           for (const projectInfo of projects) {
