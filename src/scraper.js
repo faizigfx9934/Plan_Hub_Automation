@@ -355,34 +355,38 @@ async function paginate(page) {
 }
 
 async function main() {
-  logger.step('PlanHub Scraper Pro');
-  
-  // 1. Verify VPN Connectivity
-  if (!ensureVpn()) {
-    logger.fail('FATAL: VPN is required but disconnected. Aborting run.');
-    if (telemetry.isEnabled()) {
-       await telemetry.reportError('VPN Disconnected');
-    }
-    return;
-  }
-
-  const browser = await chromium.launch({ headless: false, slowMo: 50 });
-  const sessionPath = 'session.json';
-  const contextOpts = { viewport: { width: 1920, height: 1080 } };
-  if (fs.existsSync(sessionPath)) contextOpts.storageState = sessionPath;
-
-  const context = await browser.newContext(contextOpts);
-  const page = await context.newPage();
-  let stopHeartbeat = () => {};
-
   try {
-    if (!fs.existsSync(sessionPath)) {
-      await login(page);
-      await context.storageState({ path: sessionPath });
-    } else {
-      await page.goto('https://supplier.planhub.com/project/list');
-      await ensureLoggedIn(page);
+    logger.step('PlanHub Scraper Pro');
+    
+    // 1. Verify VPN Connectivity
+    logger.info('Checking VPN Status...');
+    if (!ensureVpn()) {
+      logger.fail('FATAL: VPN is required but disconnected. Aborting run.');
+      if (telemetry.isEnabled()) {
+         await telemetry.reportError('VPN Disconnected');
+      }
+      return;
     }
+
+    logger.info('Launching Browser...');
+    const browser = await chromium.launch({ headless: false, slowMo: 50 });
+    const sessionPath = 'session.json';
+    const contextOpts = { viewport: { width: 1920, height: 1080 } };
+    if (fs.existsSync(sessionPath)) contextOpts.storageState = sessionPath;
+
+    const context = await browser.newContext(contextOpts);
+    const page = await context.newPage();
+    let stopHeartbeat = () => {};
+
+    try {
+      logger.info('Checking Session...');
+      if (!fs.existsSync(sessionPath)) {
+        await login(page);
+        await context.storageState({ path: sessionPath });
+      } else {
+        await page.goto('https://supplier.planhub.com/project/list');
+        await ensureLoggedIn(page);
+      }
 
     // Initialize Telemetry
     stopHeartbeat = telemetry.startHeartbeat();
@@ -437,17 +441,16 @@ async function main() {
     logger.ok('🏁 Run complete.');
     await telemetry.reportRunComplete({ companiesScraped: allData.length, quarantined: quarantine.length });
 
-  } catch (err) {
-    logger.fail(`Fatal Error: ${err.message}`);
-    if (telemetry.isEnabled()) {
-      await telemetry.reportError(err.message);
+    } finally {
+      if (telemetry.isEnabled()) {
+        await telemetry.reportStopping();
+      }
+      stopHeartbeat();
+      await browser.close().catch(() => {});
     }
-  } finally {
-    if (telemetry.isEnabled()) {
-      await telemetry.reportStopping();
-    }
-    stopHeartbeat();
-    await browser.close().catch(() => {});
+  } catch (globalErr) {
+    logger.fail(`CRITICAL STARTUP ERROR: ${globalErr.message}`);
+    console.error(globalErr);
   }
 }
 
