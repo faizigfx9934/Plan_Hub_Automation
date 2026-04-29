@@ -210,7 +210,9 @@ async function setDateFilter(page, dayOffset = 0) {
 }
 
 async function getProjectsOnCurrentPage(page) {
-  await page.waitForSelector('table tr', { timeout: 10000 }).catch(() => {});
+  logger.info('⏳ Waiting for project list to stabilize...');
+  await page.waitForSelector('table tr', { timeout: 15000 }).catch(() => {});
+  await page.waitForTimeout(5000); // Added more weight to load the project section
   const rows = await page.locator('table tbody tr').all();
   const projects = [];
   for (const row of rows) {
@@ -235,7 +237,42 @@ async function getProjectsOnCurrentPage(page) {
   return projects;
 }
 
-async function scrapeProject(page, projectName) {
+function isLockedProjectText(text = '') {
+  return /\blocked\b/i.test(text)
+    || /unlock this project/i.test(text)
+    || /upgrade to unlock/i.test(text)
+    || /purchase .*unlock/i.test(text)
+    || /to unlock/i.test(text);
+}
+
+async function waitWhileFleetPaused(page) {
+  while (telemetry.isPaused()) {
+    telemetry.setStatus('paused');
+    logger.info('Fleet pause is enabled from the panel. Waiting before continuing...');
+    await page.waitForTimeout(5000);
+  }
+}
+
+async function collectCompanyEntries(projectPage) {
+  const companyElements = await projectPage.locator(SEL.company.row).all();
+  const companyNames = [];
+  for (const companyElement of companyElements) {
+    const name = await companyElement.innerText().catch(() => '');
+    if (!name.trim()) continue;
+    companyNames.push(name.trim());
+  }
+  return companyNames;
+}
+
+async function scrapeProject(page, projectInfo) {
+  const projectName = typeof projectInfo === 'string' ? projectInfo : projectInfo.name;
+  const knownLocked = typeof projectInfo === 'object' && Boolean(projectInfo.locked);
+
+  if (knownLocked) {
+    logger.info(`Skipping locked project: ${projectName}`);
+    return [];
+  }
+
   logger.step(`Scraping project: ${projectName}`);
   logger.setContext(projectName);
 
@@ -250,12 +287,30 @@ async function scrapeProject(page, projectName) {
   await projectPage.waitForTimeout(3000);
 
   if (/signin|login|access\.planhub\.com/i.test(projectPage.url())) {
+    logger.fail('⚠️  Project tab hit signin — re-authenticating, skipping this project');
     await projectPage.close().catch(() => {});
     await ensureLoggedIn(page);
     return [];
   }
 
-  const projectScreenshotsDir = path.join(SCREENSHOTS_DIR, projectName.replace(/[^a-z0-9]/gi, '_'));
+  let fullProjectName = projectName;
+  let bidDueDate = '';
+  try {
+    const headerText = await projectPage.locator('body').innerText();
+    if (isLockedProjectText(headerText)) {
+      logger.info(`Skipping locked project after opening: ${projectName}`);
+      await projectPage.close().catch(() => {});
+      return [];
+    }
+    const nameMatch = headerText.match(/Project Name:\s*([^\n]+)/i);
+    if (nameMatch) fullProjectName = nameMatch[1].trim();
+    const dateMatch = headerText.match(/Bid Due Date\s*([0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4})/i);
+    if (dateMatch) bidDueDate = dateMatch[1].replace(/\//g, '-');
+  } catch (err) {}
+
+  const safeProjectName = fullProjectName.replace(/[<>:"/\\|?*\x00-\x1F]/g, '').trim().slice(0, 100);
+  const projectFolderName = bidDueDate ? `${safeProjectName} (${bidDueDate})` : safeProjectName;
+  const projectScreenshotsDir = path.join(SCREENSHOTS_DIR, projectFolderName);
   fs.mkdirSync(projectScreenshotsDir, { recursive: true });
 
   await projectPage.getByRole('button', { name: 'Subcontractors' }).click();
@@ -268,6 +323,7 @@ async function scrapeProject(page, projectName) {
 
   const companyData = [];
   for (let subPage = 1; subPage <= totalPages; subPage++) {
+    await waitWhileFleetPaused(projectPage);
     logger.step(`📄 Subcontractors page ${subPage}/${totalPages}`);
     
     await projectPage.evaluate(() => {
@@ -276,12 +332,7 @@ async function scrapeProject(page, projectName) {
     });
     await projectPage.waitForTimeout(1500);
     
-    const companyElements = await projectPage.locator('[class*="company"], [class*="subcontractor"] a').all();
-    const companiesOnThisPage = [];
-    for (const el of companyElements) {
-      const name = await el.innerText().catch(() => '');
-      if (name.trim()) companiesOnThisPage.push(name.trim());
-    }
+    const companiesOnThisPage = await collectCompanyEntries(projectPage);
     
     for (const companyName of companiesOnThisPage) {
       const dedupKey = `${projectName}|||${companyName}`;
@@ -294,25 +345,37 @@ async function scrapeProject(page, projectName) {
         ]);
 
         await companyPage.waitForLoadState('domcontentloaded');
-        await companyPage.waitForTimeout(2000);
+        await companyPage.waitForTimeout(7000); // Increased weight: page is loading and takes a screenshot too fast
 
         const safeFileName = companyName.replace(/[^a-z0-9]/gi, '_').toLowerCase().slice(0, 50);
         const screenshotPath = `${projectScreenshotsDir}/${safeFileName}.png`;
         
         await companyPage.screenshot({ path: screenshotPath, fullPage: true });
         
+        logger.setContext(`🏢 Scraping: ${companyName}`);
+        
         const bodyText = await companyPage.locator('body').innerText().catch(() => '');
         const record = {
-          project: projectName,
+          projectFolder: projectScreenshotsDir,
+          project: fullProjectName,
+          bidDate: bidDueDate,
           company: companyName,
           email: bodyText.match(/[\w.+-]+@[\w-]+\.[\w.-]+/)?.[0] || null,
           phone: bodyText.match(/(\+?\d[\d\s().-]{9,})/)?.[0] || null,
+          website: null,
           screenshot: screenshotPath,
-          scrapedAt: new Date().toISOString(),
+          sourceFile: 'scraper.js',
+          scraped_at: Date.now(), // Changed to numeric timestamp for backend compatibility
           isNew: true,
         };
         companyData.push(record);
         PREVIOUS_SCRAPES.add(dedupKey);
+        
+        // Update live counter immediately
+        const currentTotal = (global.scrapedTodayCount || 0) + 1;
+        global.scrapedTodayCount = currentTotal;
+        telemetry.setCompaniesToday(currentTotal);
+        
         await companyPage.close();
         logger.ok(`✓ ${companyName}`);
         telemetry.reportCompanies([record]);
@@ -438,52 +501,73 @@ async function main() {
 
     // Load Resume Progress or Start Offset
     const resumeOffset = loadProgress();
-    const configOffset = parseInt(process.env.START_DATE_OFFSET ?? '4', 10);
+    const configOffset = 4; // User requested 4-day gap instead of 8
     let dayOffset = resumeOffset !== null ? resumeOffset : configOffset;
 
     const allData = [];
     const quarantine = [];
+    global.scrapedTodayCount = 0; // Initialize global counter
 
     // Main Work Loop
     while (RUN_FOREVER || (Date.now() - START_TIME < MAX_RUNTIME_MS)) {
+      let dayHasErrors = false;
+      
       // 1. Select the Date Filter (now includes ZIP fetching and pasting)
       logger.step(`📅 Date Target: today+${dayOffset}`);
-      await setDateFilter(page, dayOffset);
+      try {
+        await setDateFilter(page, dayOffset);
+      } catch (err) {
+        logger.fail(`❌ Filter set failed: ${err.message}`);
+        dayHasErrors = true;
+      }
       
-      // 2. Scrape Projects
-      let pageNum = 1;
-      do {
-        logger.step(`📄 Project List Page ${pageNum}`);
-        const projects = await getProjectsOnCurrentPage(page);
-        
-        for (const projectInfo of projects) {
-          const projectName = typeof projectInfo === 'string' ? projectInfo : projectInfo.name;
-          const isLocked = typeof projectInfo === 'object' && !!projectInfo.locked;
-
-          if (isLocked) {
-            logger.info(`Skipping locked project: ${projectName}`);
-            continue;
+      if (!dayHasErrors) {
+        // 2. Scrape Projects
+        let pageNum = 1;
+        do {
+          logger.step(`📄 Project List Page ${pageNum}`);
+          const projects = await getProjectsOnCurrentPage(page);
+          
+          if (projects.length === 0) {
+            logger.info('No projects found on this page.');
           }
 
-          try {
-            const data = await scrapeProject(page, projectName);
-            allData.push(...data);
-            fs.writeFileSync(`${OUTPUT_DIR}/data.json`, JSON.stringify(allData, null, 2));
-          } catch (err) {
-            logger.fail(`❌ Failed: ${projectName} - ${err.message}`);
-            quarantine.push({ project: projectName, error: err.message, dateRange: `today+${dayOffset}` });
-            fs.writeFileSync(`${OUTPUT_DIR}/quarantine.json`, JSON.stringify(quarantine, null, 2));
-          }
-        }
-        pageNum++;
-      } while (await paginate(page, pageNum));
+          for (const projectInfo of projects) {
+            const projectName = typeof projectInfo === 'string' ? projectInfo : projectInfo.name;
+            const isLocked = typeof projectInfo === 'object' && !!projectInfo.locked;
 
-      // Successfully finished a full day's work
-      saveProgress(dayOffset);
+            if (isLocked) {
+              logger.info(`Skipping locked project: ${projectName}`);
+              continue;
+            }
+
+            try {
+              const data = await scrapeProject(page, projectName);
+              allData.push(...data);
+              fs.writeFileSync(`${OUTPUT_DIR}/data.json`, JSON.stringify(allData, null, 2));
+            } catch (err) {
+              logger.fail(`❌ Failed: ${projectName} - ${err.message}`);
+              dayHasErrors = true; // Mark day as failed if a project fails
+              quarantine.push({ project: projectName, error: err.message, dateRange: `today+${dayOffset}` });
+              fs.writeFileSync(`${OUTPUT_DIR}/quarantine.json`, JSON.stringify(quarantine, null, 2));
+            }
+          }
+          pageNum++;
+        } while (await paginate(page, pageNum));
+      }
+
+      // ONLY save progress if the ENTIRE day was processed without critical failures
+      if (!dayHasErrors) {
+        saveProgress(dayOffset);
+        dayOffset++;
+        logger.info('🔄 Day complete. Advancing...');
+      } else {
+        logger.fail(`⚠️ Skipping progress save for day +${dayOffset} due to errors. It will be retried next run.`);
+        // Note: We DO NOT dayOffset++ here. The loop will restart on the same day.
+        // To avoid infinite retry loops on a "stubborn" error, we'll add a short wait.
+        await page.waitForTimeout(10000);
+      }
       
-      // Advance to next day
-      dayOffset++;
-      logger.info('🔄 Day complete. Advancing...');
       await page.waitForTimeout(5000);
     }
 

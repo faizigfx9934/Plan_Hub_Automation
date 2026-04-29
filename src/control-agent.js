@@ -117,14 +117,20 @@ async function isScraperRunning() {
 
 async function sendHeartbeat() {
   const running = await isScraperRunning();
+  if (running) {
+    // If scraper is running, let IT handle the heartbeats and project status.
+    // This prevents the "Idle" glitch on the dashboard.
+    return;
+  }
+  
   try {
     await fetchWithAuth(`${API_BASE}/api/heartbeat`, {
       method: 'POST',
       body: JSON.stringify({
         laptop_id: LAPTOP_ID,
-        status: running ? 'running' : 'idle',
+        status: 'idle',
         state: process.env.STATE || 'Unknown',
-        ...(running ? {} : { current_project: 'Idle / Ready' })
+        current_project: 'Idle / Ready'
       })
     });
   } catch (e) {

@@ -40,12 +40,18 @@ async function post(path, body, { timeoutMs = 10000, retries = 3 } = {}) {
           if (data.config) state.remoteConfig = data.config;
         }
         return true;
+      } else {
+        const text = await res.text().catch(() => '');
+        logger.fail(`[TELEMETRY] ${path} failed with status ${res.status}: ${text.slice(0, 100)}`);
       }
     } catch (e) {
-      // Quietly retry
+      if (i === retries - 1) {
+        logger.fail(`[TELEMETRY] ${path} connection error: ${e.message}`);
+      }
     } finally {
       clearTimeout(timer);
     }
+    await new Promise(r => setTimeout(r, 1000)); // Wait before retry
   }
   return false;
 }
@@ -75,12 +81,17 @@ export function startHeartbeat({ intervalMs = Number(process.env.HEARTBEAT_INTER
 
   let timer = null;
   const tick = async () => {
-    await post('/api/heartbeat', {
+    const context = logger.getContext?.() || 'Idle';
+    const payload = {
       laptop_id: LAPTOP_ID,
       status: state.currentStatus,
       state: process.env.STATE || 'CA',
-      current_project: logger.getContext?.() || 'Idle',
-    });
+      current_project: context,
+      project: context,
+      companies_today: state.companiesToday || 0, // NEW: Pass the count to the dashboard
+    };
+    
+    await post('/api/heartbeat', payload);
     await uploadLogBatch();
     timer = setTimeout(tick, intervalMs);
   };
@@ -89,12 +100,17 @@ export function startHeartbeat({ intervalMs = Number(process.env.HEARTBEAT_INTER
   return () => clearTimeout(timer);
 }
 
+export function setCompaniesToday(count) {
+  state.companiesToday = count;
+}
+
 export async function reportStopping() {
   setStatus('stopped');
   await post('/api/heartbeat', {
     laptop_id: LAPTOP_ID,
     status: 'stopped',
     current_project: '(exiting)',
+    companies_today: state.companiesToday || 0,
   }, { timeoutMs: 2000, retries: 1 });
 }
 
@@ -108,6 +124,35 @@ export async function reportRunComplete(summary) {
     date_ranges: summary.dateRanges ?? 0,
     quarantined: summary.quarantined ?? 0,
   });
+}
+
+export async function reportCompanies(companies) {
+  if (!companies || companies.length === 0) return;
+  
+  const payload = {
+    laptop_id: LAPTOP_ID,
+    state: process.env.STATE || 'CA',
+    companies: companies.map(c => ({
+      ...c,
+      laptop_id: LAPTOP_ID,
+      state: process.env.STATE || 'CA',
+      scraped_at: typeof c.scraped_at === 'number' ? c.scraped_at : Date.now(), // Critical: Backend query > expects number
+    }))
+  };
+
+  const ok = await post('/api/companies', payload);
+
+  if (ok) {
+    // Force immediate heartbeat with latest info
+    await post('/api/heartbeat', {
+      laptop_id: LAPTOP_ID,
+      status: state.currentStatus,
+      state: process.env.STATE || 'CA',
+      current_project: logger.getContext?.() || 'Idle',
+      project: logger.getContext?.() || 'Idle',
+      companies_today: state.companiesToday || 0,
+    });
+  }
 }
 
 export function isPaused() {
