@@ -110,6 +110,11 @@ if (Get-Command npm -ErrorAction SilentlyContinue) {
 Write-Log "`n[5/8] Finalizing OCR..." "Yellow"
 Set-Location $OcrDir
 if (Get-Command python -ErrorAction SilentlyContinue) {
+    if (Test-Path "venv") { 
+        Write-Log "   Removing old virtual environment..." "Gray"
+        Remove-Item "venv" -Recurse -Force -ErrorAction SilentlyContinue 
+    }
+    Write-Log "   Creating fresh virtual environment..." "Gray"
     python -m venv venv
     .\venv\Scripts\python.exe -m pip install --upgrade pip
     .\venv\Scripts\python.exe -m pip install paddleocr paddlepaddle-gpu>=2.6.2 setuptools opencv-python google-api-python-client google-auth-httplib2 google-auth-oauthlib requests gspread oauth2client
