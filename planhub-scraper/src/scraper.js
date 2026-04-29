@@ -9,7 +9,8 @@ import * as telemetry from './telemetry.js';
 import { ensureVpn } from './vpn.js';
 
 // Paths
-const OCR_DONE_DIR = path.join(process.cwd(), '..', 'ocr-pipeline', 'done');
+global.OCR_DONE_DIR = path.join(process.cwd(), '..', 'ocr-pipeline', 'done');
+const OCR_DONE_DIR = global.OCR_DONE_DIR;
 
 // Configuration
 const RUN_FOREVER = process.env.RUN_FOREVER === 'true';
@@ -757,6 +758,11 @@ async function main() {
         }
       } catch (loopErr) {
         logger.fail(`⚠️ Unexpected Loop Error on day +${dayOffset}: ${loopErr.message}`);
+        
+        // Loop Breaker: Always advance even on unexpected crashes to avoid getting stuck forever
+        logger.info('🔄 Force-advancing to next date to break the loop...');
+        saveProgress(dayOffset);
+        dayOffset++;
         await page.waitForTimeout(10000);
       }
     }
