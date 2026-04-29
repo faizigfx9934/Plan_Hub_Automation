@@ -398,20 +398,19 @@ async function scrapeProject(page, projectInfo) {
         if (href) {
           const absoluteUrl = href.startsWith('http') ? href : new URL(href, projectPage.url()).href;
           companyPage = await page.context().newPage();
-          await companyPage.goto(absoluteUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+          await companyPage.goto(absoluteUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
         } else {
-          // Strategy 2: Ctrl+Click fallback
+          // Strategy 2: Ctrl+Click fallback (Reduced timeout to 5s to avoid long waits)
           const [openedPage] = await Promise.all([
-            page.context().waitForEvent('page', { timeout: 15000 }),
+            page.context().waitForEvent('page', { timeout: 5000 }),
             projectPage.getByText(companyName).first().click({ modifiers: ['ControlOrMeta'] }),
           ]);
           companyPage = openedPage;
         }
 
-        await companyPage.waitForLoadState('domcontentloaded');
-        // Smarter wait: wait for content instead of fixed 5s
-        await companyPage.waitForSelector('.profile-container, .company-profile, body', { timeout: 10000 }).catch(() => {});
-        await companyPage.waitForTimeout(2000); // 2s buffer is enough if content is there
+        // Smarter wait: wait for content instead of fixed duration
+        await companyPage.waitForSelector('.profile-container, .company-profile, body', { timeout: 7000 }).catch(() => {});
+        await companyPage.waitForTimeout(800); // Trimmed to 800ms for speed
 
         const safeFileName = companyName.replace(/[^a-z0-9]/gi, '_').toLowerCase().slice(0, 50);
         const screenshotPath = `${projectScreenshotsDir}/${safeFileName}.png`;
