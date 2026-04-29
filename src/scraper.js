@@ -362,13 +362,13 @@ async function scrapeProject(page, projectInfo) {
   await subTab.waitFor({ state: 'attached', timeout: 10000 }).catch(() => {});
   await subTab.scrollIntoViewIfNeeded().catch(() => {});
   
-  // Try normal click, then force click, then JS click
-  await subTab.click({ timeout: 5000 }).catch(async () => {
-    await subTab.click({ force: true, timeout: 5000 }).catch(async () => {
-      await subTab.evaluate(el => el.click());
-    });
+  await subTab.click({ force: true }).catch(async () => {
+    await subTab.evaluate(el => el.click());
   });
-  await projectPage.waitForTimeout(2000);
+  
+  // User Requested: Wait 5 seconds after entering subcontractors page
+  logger.info('   Waiting 5s for list to settle...');
+  await projectPage.waitForTimeout(5000);
 
   // 4. Scroll internal containers to trigger loading (Crucial for subprojects list)
   await projectPage.evaluate(() => {
@@ -415,9 +415,8 @@ async function scrapeProject(page, projectInfo) {
           companyPage = openedPage;
         }
 
-        // Smarter wait: wait for content instead of fixed duration
-        await companyPage.waitForSelector('.profile-container, .company-profile, body', { timeout: 7000 }).catch(() => {});
-        await companyPage.waitForTimeout(800); 
+        // User Requested: Wait 2-3 seconds before screenshot
+        await companyPage.waitForTimeout(2500); 
 
         const safeFileName = companyName.replace(/[^a-z0-9]/gi, '_').toLowerCase().slice(0, 50);
         const screenshotPath = `${projectScreenshotsDir}/${safeFileName}.png`;
@@ -448,6 +447,9 @@ async function scrapeProject(page, projectInfo) {
         await companyPage.close();
         logger.ok(`✓ ${companyName}`);
         telemetry.reportCompanies([record]);
+        
+        // User Requested: Wait 3 seconds between companies
+        await projectPage.waitForTimeout(3000);
       } catch (err) {
         logger.fail(`Failed ${companyName}: ${err.message}`);
         if (companyPage) await companyPage.close().catch(() => {});
