@@ -127,9 +127,26 @@ async function setDateFilter(page, dayOffset = 0) {
   const endDate = new Date(startDate);
 
   const clickCalendarDay = async (d) => {
+    const targetMonth = d.toLocaleString('en-US', { month: 'long' });
+    const targetYear = d.getFullYear().toString();
     const ariaLabel = d.toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+
+    // Navigate to correct month/year
+    for (let i = 0; i < 12; i++) {
+      const period = await page.locator('button.mat-calendar-period-button').innerText().catch(() => '');
+      if (period.includes(targetMonth) && period.includes(targetYear)) break;
+      
+      const nextBtn = page.locator('button.mat-calendar-next-button');
+      if (await nextBtn.isVisible()) {
+        await nextBtn.click();
+        await page.waitForTimeout(500);
+      } else {
+        break;
+      }
+    }
+
     const btn = page.locator(`button[aria-label="${ariaLabel}"]`).first();
-    await btn.waitFor({ state: 'attached', timeout: 10000 });
+    await btn.waitFor({ state: 'attached', timeout: 5000 });
     await btn.evaluate(el => {
       el.scrollIntoView({ block: 'center', inline: 'center' });
       el.click();
@@ -137,7 +154,7 @@ async function setDateFilter(page, dayOffset = 0) {
   };
 
   await clickCalendarDay(startDate);
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(800);
   await clickCalendarDay(endDate);
   await page.waitForTimeout(1000);
 
