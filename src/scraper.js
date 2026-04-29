@@ -378,26 +378,41 @@ async function scrapeProject(page, projectInfo) {
     await projectPage.waitForTimeout(1500);
     
     const companiesOnThisPage = await collectCompanyEntries(projectPage);
+    logger.info(`   Found ${companiesOnThisPage.length} companies on page ${subPage}`);
     
     for (const companyName of companiesOnThisPage) {
       const dedupKey = `${projectName}|||${companyName}`;
       if (PREVIOUS_SCRAPES.has(dedupKey)) continue;
 
+      let companyPage = null;
       try {
-        const [companyPage] = await Promise.all([
-          page.context().waitForEvent('page', { timeout: 15000 }),
-          projectPage.getByText(companyName).first().click({ modifiers: ['ControlOrMeta'] }),
-        ]);
+        logger.info(`Opening ${companyName}...`);
+        
+        // Strategy 1: Try direct URL extraction (faster, avoids timeouts)
+        const escapedName = companyName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const anchor = projectPage.locator('a').filter({ hasText: new RegExp(`^\\s*${escapedName}(\\s|$)`, 'i') }).first();
+        const href = await anchor.getAttribute('href').catch(() => null);
+
+        if (href) {
+          const absoluteUrl = href.startsWith('http') ? href : new URL(href, projectPage.url()).href;
+          companyPage = await page.context().newPage();
+          await companyPage.goto(absoluteUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        } else {
+          // Strategy 2: Ctrl+Click fallback
+          const [openedPage] = await Promise.all([
+            page.context().waitForEvent('page', { timeout: 15000 }),
+            projectPage.getByText(companyName).first().click({ modifiers: ['ControlOrMeta'] }),
+          ]);
+          companyPage = openedPage;
+        }
 
         await companyPage.waitForLoadState('domcontentloaded');
-        await companyPage.waitForTimeout(7000); // Increased weight: page is loading and takes a screenshot too fast
+        await companyPage.waitForTimeout(5000); 
 
         const safeFileName = companyName.replace(/[^a-z0-9]/gi, '_').toLowerCase().slice(0, 50);
         const screenshotPath = `${projectScreenshotsDir}/${safeFileName}.png`;
         
         await companyPage.screenshot({ path: screenshotPath, fullPage: true });
-        
-        logger.setContext(`🏢 Scraping: ${companyName}`);
         
         const bodyText = await companyPage.locator('body').innerText().catch(() => '');
         const record = {
@@ -410,13 +425,12 @@ async function scrapeProject(page, projectInfo) {
           website: null,
           screenshot: screenshotPath,
           sourceFile: 'scraper.js',
-          scraped_at: Date.now(), // Changed to numeric timestamp for backend compatibility
+          scraped_at: Date.now(),
           isNew: true,
         };
         companyData.push(record);
         PREVIOUS_SCRAPES.add(dedupKey);
         
-        // Update live counter immediately
         const currentTotal = (global.scrapedTodayCount || 0) + 1;
         global.scrapedTodayCount = currentTotal;
         telemetry.setCompaniesToday(currentTotal);
@@ -426,6 +440,7 @@ async function scrapeProject(page, projectInfo) {
         telemetry.reportCompanies([record]);
       } catch (err) {
         logger.fail(`Failed ${companyName}: ${err.message}`);
+        if (companyPage) await companyPage.close().catch(() => {});
       }
     }
     
