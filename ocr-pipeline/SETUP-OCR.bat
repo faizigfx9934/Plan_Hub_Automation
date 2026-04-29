@@ -29,8 +29,7 @@ if not exist "venv" (
 )
 call venv\Scripts\activate
 python -m pip install --upgrade pip
-pip install -r requirements.txt --no-cache-dir
-python -c "import google.oauth2; import gspread; print('[OK] Google API modules ready.')"
+pip install -r requirements.txt
 
 REM 3. Install Tesseract
 where tesseract >nul 2>nul

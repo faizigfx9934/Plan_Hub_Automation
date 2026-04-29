@@ -17,14 +17,6 @@ if not exist "venv\Scripts\activate.bat" (
 if not exist "output" mkdir output
 if not exist "logs" mkdir logs
 
-:: Auto-Repair check for missing modules
-echo [+] Verifying dependencies...
-venv\Scripts\python.exe -c "import gspread; import google.oauth2" 2>nul
-if %ERRORLEVEL% NEQ 0 (
-    echo [!] Missing modules detected. Running quick repair...
-    venv\Scripts\python.exe -m pip install gspread google-auth --no-cache-dir
-)
-
 venv\Scripts\python.exe ocr_pipeline.py
 
 echo.

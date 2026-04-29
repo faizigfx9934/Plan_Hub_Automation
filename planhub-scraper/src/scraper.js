@@ -24,44 +24,64 @@ fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
 
 let COMPANY_ZIP_CODE = process.env.PLANHUB_ZIP || null; // Can be pre-seeded by setup script
 const OCR_DONE_DIR = path.join(process.cwd(), '..', 'ocr-pipeline', 'done');
+let filtersInitialized = false; // Track if ZIP/distance have been set this session
 
 // State Persistence
 function loadProgress() {
   if (fs.existsSync(PROGRESS_FILE)) {
     try {
       const data = JSON.parse(fs.readFileSync(PROGRESS_FILE, 'utf8'));
-      if (data.dayOffset !== undefined) {
-        const savedDate = new Date(data.timestamp);
+
+      // v3: Use saved target date for reliable resume
+      if (data.targetDate) {
+        const target = new Date(data.targetDate + 'T00:00:00');
         const today = new Date();
-        const diffDays = Math.floor((today - savedDate) / (1000 * 60 * 60 * 24));
-        const resumeOffset = data.dayOffset - diffDays;
-        
-        // Safety Cap: If offset is suspicious (> 60 days) or negative, reset to default
-        if (resumeOffset > 60 || resumeOffset < 0) {
-          logger.warning(`📈 Offset ${resumeOffset} is outside safe range (0-60). Resetting to default.`);
-          return null;
+        today.setHours(0, 0, 0, 0);
+        const resumeOffset = Math.round((target - today) / (1000 * 60 * 60 * 24));
+
+        if (resumeOffset > 60) {
+          logger.warning(`📈 Target date ${data.targetDate} is >60 days away. Resetting to default.`);
+          return { dayOffset: null, pageNum: 1 };
+        }
+        if (resumeOffset < 0) {
+          logger.warning(`📈 Target date ${data.targetDate} is in the past. Resetting to default.`);
+          return { dayOffset: null, pageNum: 1 };
         }
 
-        logger.info(`📈 Resuming from progress.json (Saved Offset: ${data.dayOffset}, Adjusted: ${resumeOffset})`);
-        return resumeOffset;
+        const savedPage = data.pageNum || 1;
+        logger.info(`📈 Resuming from saved date: ${data.targetDate} (today+${resumeOffset}), page ${savedPage}`);
+        return { dayOffset: resumeOffset, pageNum: savedPage };
+      }
+
+      // Legacy fallback for old progress.json format
+      if (data.dayOffset !== undefined) {
+        logger.info(`📈 Legacy progress found (dayOffset: ${data.dayOffset}). Using as-is.`);
+        return { dayOffset: data.dayOffset, pageNum: 1 };
       }
     } catch (err) {
       logger.fail('Failed to parse progress.json, starting fresh');
     }
   }
-  return null;
+  return { dayOffset: null, pageNum: 1 };
 }
 
-function saveProgress(offset) {
+function saveProgress(offset, pageNum = 1) {
   try {
+    const today = new Date();
+    const targetDate = new Date(today);
+    targetDate.setDate(today.getDate() + offset);
+    const targetDateStr = targetDate.toISOString().split('T')[0]; // e.g. "2026-05-04"
+
     const data = {
       dayOffset: offset,
+      targetDate: targetDateStr,
+      pageNum: pageNum,
       timestamp: new Date().toISOString()
     };
     const dir = path.dirname(PROGRESS_FILE);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(PROGRESS_FILE, JSON.stringify(data, null, 2));
-    logger.ok(`💾 Progress saved: dayOffset ${offset}`);
+    logger.ok(`💾 Progress saved: ${targetDateStr} page ${pageNum} (today+${offset})`);
   } catch (err) {
     logger.fail(`Failed to save progress: ${err.message}`);
   }
@@ -213,10 +233,14 @@ async function getCompanyZipCode(page) {
 }
 
 async function setDateFilter(page, dayOffset = 0) {
-  logger.step(`Setting date and ZIP filters: today+${dayOffset}`);
-  
-  // 1. Fetch ZIP from settings
-  const zipCode = await getCompanyZipCode(page);
+  logger.step(`Setting date filter: today+${dayOffset}`);
+
+  // Only fetch ZIP and set ZIP/distance on the FIRST call this session
+  let zipCode = COMPANY_ZIP_CODE;
+  if (!filtersInitialized) {
+    // 1. Fetch ZIP from settings (only once)
+    zipCode = await getCompanyZipCode(page);
+  }
   
   // 2. Return to project list
   await page.goto('https://supplier.planhub.com/project/list', { waitUntil: 'domcontentloaded' });
@@ -277,21 +301,27 @@ async function setDateFilter(page, dayOffset = 0) {
   await page.keyboard.press('Escape');
   await page.waitForTimeout(2000);
 
-  // 6. Paste ZIP Code from account settings
-  const zipFilter = page.getByRole(SEL.account.zipCodeInput.role, { name: SEL.account.zipCodeInput.name }).first();
-  await zipFilter.click();
-  await zipFilter.fill(zipCode);
-  await zipFilter.press('Tab');
-  await page.waitForTimeout(800);
+  // 6 & 7. ZIP Code and Distance — only on first run (they persist in PlanHub)
+  if (!filtersInitialized) {
+    // 6. Paste ZIP Code from account settings
+    const zipFilter = page.getByRole(SEL.account.zipCodeInput.role, { name: SEL.account.zipCodeInput.name }).first();
+    await zipFilter.click();
+    await zipFilter.fill(zipCode);
+    await zipFilter.press('Tab');
+    await page.waitForTimeout(800);
 
-  // 7. Set Distance (200 miles)
-  const distanceField = page.locator(SEL.dateFilter.distanceField).filter({
-    has: page.locator('mat-label').filter({ hasText: /^Distance$/ }),
-  }).first();
-  await distanceField.locator(SEL.dateFilter.distanceTrigger).click();
-  await page.locator(SEL.dateFilter.distanceOption).filter({ hasText: /^\s*200(\s*miles)?\s*$/i }).first().click();
-  
-  logger.ok(`Filter set: ${targetDate.toLocaleDateString()} | ZIP ${zipCode} | 200 miles`);
+    // 7. Set Distance (200 miles)
+    const distanceField = page.locator(SEL.dateFilter.distanceField).filter({
+      has: page.locator('mat-label').filter({ hasText: /^Distance$/ }),
+    }).first();
+    await distanceField.locator(SEL.dateFilter.distanceTrigger).click();
+    await page.locator(SEL.dateFilter.distanceOption).filter({ hasText: /^\s*200(\s*miles)?\s*$/i }).first().click();
+
+    filtersInitialized = true;
+    logger.ok(`Filter set: ${targetDate.toLocaleDateString()} | ZIP ${zipCode} | 200 miles`);
+  } else {
+    logger.ok(`Date changed to: ${targetDate.toLocaleDateString()} (ZIP & distance already set)`);
+  }
 }
 
 async function getProjectsOnCurrentPage(page) {
@@ -625,7 +655,16 @@ async function main() {
     }
 
     logger.info('Launching Browser...');
-    const browser = await chromium.launch({ headless: false, slowMo: 50 });
+    const browser = await chromium.launch({
+      headless: false,
+      slowMo: 50,
+      args: [
+        '--start-minimized',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-renderer-backgrounding',
+        '--disable-background-timer-throttling',
+      ],
+    });
     const sessionPath = 'session.json';
     const contextOpts = { viewport: null }; // Remove fixed viewport for smaller screens
     if (fs.existsSync(sessionPath)) contextOpts.storageState = sessionPath;
@@ -649,120 +688,145 @@ async function main() {
     telemetry.setStatus('running');
 
     // Load Resume Progress or Start Offset
-    const resumeOffset = loadProgress();
+    const resumed = loadProgress();
     const configOffset = parseInt(process.env.START_DATE_OFFSET || '4', 10);
-    let dayOffset = resumeOffset !== null ? resumeOffset : configOffset;
+    let dayOffset = resumed.dayOffset !== null ? resumed.dayOffset : configOffset;
+    let resumePageNum = resumed.pageNum || 1; // Page to resume from on the current date
 
     const allData = [];
     const quarantine = [];
     global.scrapedTodayCount = 0; // Initialize global counter
 
     // Main Work Loop
+    let dateFilterRetries = 0;
+    const MAX_DATE_RETRIES = 2;
+
     while (RUN_FOREVER || (Date.now() - START_TIME < MAX_RUNTIME_MS)) {
       try {
         let dayHasErrors = false;
         
-        // 1. Select the Date Filter (now includes ZIP fetching and pasting)
+        // 1. Select the Date Filter
         logger.step(`📅 Date Target: today+${dayOffset}`);
         try {
           await setDateFilter(page, dayOffset);
+          dateFilterRetries = 0; // Reset on success
         } catch (err) {
           logger.fail(`❌ Filter set failed: ${err.message}`);
-          dayHasErrors = true;
+          dateFilterRetries++;
+
+          if (dateFilterRetries >= MAX_DATE_RETRIES) {
+            logger.warning(`⚠️ Date filter failed ${MAX_DATE_RETRIES} times for today+${dayOffset}. Skipping to next day.`);
+            saveProgress(dayOffset);
+            dayOffset++;
+            dateFilterRetries = 0;
+          } else {
+            logger.info(`🔄 Retrying date filter (attempt ${dateFilterRetries}/${MAX_DATE_RETRIES})...`);
+            await page.waitForTimeout(5000);
+          }
+          continue; // Either retry or skip — go to next loop iteration
         }
         
-        if (!dayHasErrors) {
-          // 2. Analyze date range totals
-          logger.info('⏳ Analyzing date roadmap...');
-          await page.waitForTimeout(3000); // Give PlanHub a moment to update results
-          
-          let totalPages = 1;
-          let totalProjects = 'unknown';
-          
-          const paginationText = await page.locator('text=/Page \\d+ of \\d+/').first().innerText().catch(() => '');
-          const totalPagesMatch = paginationText.match(/Page \d+ of (\d+)/);
-          if (totalPagesMatch) totalPages = parseInt(totalPagesMatch[1]);
+        // 2. Analyze date range totals
+        logger.info('⏳ Analyzing date roadmap...');
+        await page.waitForTimeout(3000); // Give PlanHub a moment to update results
+        
+        let totalPages = 1;
+        let totalProjects = 'unknown';
+        
+        const paginationText = await page.locator('text=/Page \\d+ of \\d+/').first().innerText().catch(() => '');
+        const totalPagesMatch = paginationText.match(/Page \d+ of (\d+)/);
+        if (totalPagesMatch) totalPages = parseInt(totalPagesMatch[1]);
 
-          const resultsText = await page.locator('text=/\\d+-\\d+ of \\d+/').first().innerText().catch(() => '');
-          const resultsMatch = resultsText.match(/of (\d+)/);
-          if (resultsMatch) totalProjects = resultsMatch[1];
+        const resultsText = await page.locator('text=/\\d+-\\d+ of \\d+/').first().innerText().catch(() => '');
+        const resultsMatch = resultsText.match(/of (\d+)/);
+        if (resultsMatch) totalProjects = resultsMatch[1];
 
-          logger.info(`📊 ROADMAP for today+${dayOffset}: Found ${totalProjects} projects across ${totalPages} page(s).`);
+        logger.info(`📊 ROADMAP for today+${dayOffset}: Found ${totalProjects} projects across ${totalPages} page(s).`);
 
-          if (totalProjects === '0' || totalProjects === 0) {
-            logger.ok(`📅 Date today+${dayOffset} is empty. Skipping to next date...`);
-            saveProgress(dayOffset);
-            dayOffset++;
-            continue; // Jump to next date immediately
-          }
+        if (totalProjects === '0' || totalProjects === 0) {
+          logger.ok(`📅 Date today+${dayOffset} is empty. Skipping to next date...`);
+          saveProgress(dayOffset);
+          dayOffset++;
+          continue; // Jump to next date immediately
+        }
 
-          // 3. Scrape Projects
-          let pageNum = 1;
-          let dayActuallyEmpty = false;
-          do {
-            logger.step(`📄 Project List Page ${pageNum}`);
-            const projects = await getProjectsOnCurrentPage(page);
-            
-            if (projects.length === 0) {
-              logger.info(`ℹ️  No projects found on page ${pageNum}.`);
-              if (pageNum === 1) {
-                dayActuallyEmpty = true;
-                break;
-              }
+        // 3. Scrape Projects — resume from saved page if restarting mid-day
+        let pageNum = resumePageNum;
+        resumePageNum = 1; // Only use saved page for the first date after restart
+        let dayActuallyEmpty = false;
+
+        // Paginate to resume page if needed
+        if (pageNum > 1) {
+          logger.info(`⏩ Resuming from page ${pageNum} (skipping pages 1-${pageNum - 1})...`);
+          for (let p = 2; p <= pageNum; p++) {
+            const ok = await paginate(page, p);
+            if (!ok) {
+              logger.warning(`⚠️ Could not reach page ${p}. Starting from page 1.`);
+              pageNum = 1;
+              break;
             }
-
-            for (const projectInfo of projects) {
-              const projectName = typeof projectInfo === 'string' ? projectInfo : projectInfo.name;
-              const isLocked = typeof projectInfo === 'object' && !!projectInfo.locked;
-
-              if (isLocked) {
-                logger.info(`Skipping locked project: ${projectName}`);
-                continue;
-              }
-
-              // Check if project is already fully done (Early skip)
-              const existingFolder = findProjectFolder(projectName);
-              const localCount = countScreenshots(existingFolder);
-              
-              if (localCount >= 1) {
-                  logger.ok(`⏭️  Skipping project (Already scraped): ${projectName} (${localCount} screenshots)`);
-                  continue; // Move to next project immediately
-              }
-
-              try {
-                const data = await scrapeProject(page, projectName);
-                allData.push(...data);
-                fs.writeFileSync(`${OUTPUT_DIR}/data.json`, JSON.stringify(allData, null, 2));
-              } catch (err) {
-                logger.fail(`❌ Failed: ${projectName} - ${err.message}`);
-                dayHasErrors = true; 
-                quarantine.push({ project: projectName, error: err.message, dateRange: `today+${dayOffset}` });
-                fs.writeFileSync(`${OUTPUT_DIR}/quarantine.json`, JSON.stringify(quarantine, null, 2));
-              }
-            }
-            pageNum++;
-          } while (await paginate(page, pageNum) && !dayActuallyEmpty);
-
-          if (dayActuallyEmpty) {
-            logger.ok(`📅 Date today+${dayOffset} had no projects. Skipping...`);
-            saveProgress(dayOffset);
-            dayOffset++;
-            continue;
           }
         }
 
-        // ONLY save progress if the ENTIRE day was processed without critical failures
-        if (!dayHasErrors) {
-          saveProgress(dayOffset);
-          dayOffset++;
-          logger.info('🔄 Day complete. Advancing...');
+        do {
+          logger.step(`📄 Project List Page ${pageNum}`);
+          const projects = await getProjectsOnCurrentPage(page);
+          
+          if (projects.length === 0) {
+            logger.info(`ℹ️  No projects found on page ${pageNum}.`);
+            if (pageNum <= 1) {
+              dayActuallyEmpty = true;
+              break;
+            }
+          }
+
+          for (const projectInfo of projects) {
+            const projectName = typeof projectInfo === 'string' ? projectInfo : projectInfo.name;
+            const isLocked = typeof projectInfo === 'object' && !!projectInfo.locked;
+
+            if (isLocked) {
+              logger.info(`Skipping locked project: ${projectName}`);
+              continue;
+            }
+
+            // scrapeProject() handles company-level dedup internally:
+            // - Skips fully-scraped projects (localCount >= totalCompaniesHint)
+            // - Skips individual companies already in dedup/screenshots/OCR done
+            try {
+              const data = await scrapeProject(page, projectName);
+              allData.push(...data);
+              fs.writeFileSync(`${OUTPUT_DIR}/data.json`, JSON.stringify(allData, null, 2));
+            } catch (err) {
+              logger.fail(`❌ Failed: ${projectName} - ${err.message}`);
+              dayHasErrors = true; 
+              quarantine.push({ project: projectName, error: err.message, dateRange: `today+${dayOffset}` });
+              fs.writeFileSync(`${OUTPUT_DIR}/quarantine.json`, JSON.stringify(quarantine, null, 2));
+            }
+          }
+
+          // Save progress after each page so crash-resume lands on the right page
+          saveProgress(dayOffset, pageNum + 1);
+          pageNum++;
+        } while (await paginate(page, pageNum) && !dayActuallyEmpty);
+
+        if (dayActuallyEmpty) {
+          logger.ok(`📅 Date today+${dayOffset} had no projects. Skipping...`);
+        }
+
+        // Day complete — save progress pointing to next day, page 1
+        saveProgress(dayOffset + 1);
+        dayOffset++;
+        if (dayHasErrors) {
+          logger.warning(`⚠️ Day +${dayOffset - 1} had some project errors, but advancing to next day. Failed projects are in quarantine.`);
         } else {
-          logger.fail(`⚠️ Skipping progress save for day +${dayOffset} due to errors. It will be retried next run.`);
-          await page.waitForTimeout(10000);
+          logger.info('🔄 Day complete. Advancing...');
         }
       } catch (loopErr) {
         logger.fail(`⚠️ Unexpected Loop Error on day +${dayOffset}: ${loopErr.message}`);
-        await page.waitForTimeout(10000);
+        // Still advance to prevent getting stuck
+        saveProgress(dayOffset + 1);
+        dayOffset++;
+        await page.waitForTimeout(5000);
       }
     }
 
@@ -786,6 +850,12 @@ process.on('SIGINT', async () => {
   logger.info('\n🛑 Stopping... notifying dashboard');
   await telemetry.reportStopping().catch(() => {});
   process.exit(0);
+});
+
+// Broad shutdown handler for unexpected stops
+process.on('exit', () => {
+  // Synchronous only, but we already have async handlers for SIGINT
+  logger.info('Scraper process exiting.');
 });
 
 main();

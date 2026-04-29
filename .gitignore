@@ -14,7 +14,6 @@ data/stats_test.json
 
 # Build artifacts
 build/
-dist/
 
 # Python / Logs
 __pycache__/
@@ -26,3 +25,14 @@ data/preserved-*
 backups/
 *.xlsx
 *.csv
+
+# Machine-specific
+scratch/
+export-for-new-laptop.bat
+planhub-deploy/
+ocr-pipeline/done/
+ocr-pipeline/input/
+ocr-pipeline/logs/
+ocr-pipeline/reset_archive/
+.gitignore_tmp
+*.old.js

@@ -1,0 +1,19 @@
+name = "planhub-telemetry"
+main = "src/index.js"
+compatibility_date = "2026-04-01"
+
+# ---- D1 database binding ----
+# After running `wrangler d1 create planhub-telemetry`, paste the returned
+# database_id below. Then run:
+#   wrangler d1 execute planhub-telemetry --remote --file=schema.sql
+[[d1_databases]]
+binding = "DB"
+database_name = "planhub-telemetry"
+database_id = "1ba31431-90d9-4953-a3b4-adbfb1be8bde"
+
+# ---- Secrets (set via `wrangler secret put <NAME>`, never committed) ----
+# INGEST_TOKEN  — shared bearer token every laptop sends on write requests
+# READ_TOKEN    — bearer token the two panels use to read data
+#
+# Suggested: generate strong random strings, e.g.
+#   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
