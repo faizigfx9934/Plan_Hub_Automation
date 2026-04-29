@@ -342,8 +342,24 @@ async function scrapeProject(page, projectInfo) {
   const projectScreenshotsDir = path.join(SCREENSHOTS_DIR, projectFolderName);
   fs.mkdirSync(projectScreenshotsDir, { recursive: true });
 
-  await projectPage.getByRole('button', { name: 'Subcontractors' }).click();
-  await projectPage.waitForTimeout(2500);
+  // 3. Click on "Subcontractors" tab
+  logger.info('   Opening Subcontractors tab...');
+  const subTab = projectPage.locator('button, .mat-tab-label, .mat-mdc-tab').filter({ hasText: /^Subcontractors$/i }).first();
+  await subTab.waitFor({ state: 'visible', timeout: 15000 }).catch(() => {});
+  await subTab.evaluate(el => el.scrollIntoView({ block: 'center' })).catch(() => {});
+  await subTab.click().catch(async () => {
+    await subTab.evaluate(el => el.click());
+  });
+  await projectPage.waitForTimeout(3000);
+
+  // 4. Scroll internal containers to trigger loading (Crucial for subprojects list)
+  await projectPage.evaluate(() => {
+    const scrollables = document.querySelectorAll('[class*="scroll"], [class*="list"], .mat-dialog-content, [class*="container"]');
+    scrollables.forEach(el => {
+      if (el.scrollHeight > el.clientHeight) el.scrollTop = el.scrollHeight;
+    });
+  });
+  await projectPage.waitForTimeout(1500);
 
   let totalPages = 1;
   const pageText = await projectPage.locator('text=/Page \\d+ of \\d+/').first().innerText().catch(() => '');
