@@ -145,19 +145,21 @@ async function setDateFilter(page, dayOffset = 0) {
   }
 
   // 3. Open Search Filters
-  await page.waitForSelector('text=/search/i', { timeout: 30000 });
+  logger.info('   Opening search filters...');
+  await page.waitForSelector('text=/search/i', { timeout: 15000 }).catch(() => {});
   await page.getByLabel('Search (2)').getByRole('button').filter({ hasText: /^$/ }).click();
-  await page.waitForTimeout(1000);
+  await page.waitForTimeout(500);
 
   // 4. Navigate to "Custom" tab in date carousel
+  logger.info('   Selecting "Custom" date tab...');
   for (let i = 0; i < 8; i++) {
     const customTab = page.getByText('Custom', { exact: true });
     if (await customTab.isVisible().catch(() => false)) break;
     await page.locator(SEL.dateFilter.paginateArrow).click().catch(() => {});
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(200);
   }
   await page.getByText('Custom').click();
-  await page.waitForTimeout(1500);
+  await page.waitForTimeout(1000);
 
   // 5. Set Date (today + dayOffset)
   const today = new Date();
@@ -199,11 +201,12 @@ async function setDateFilter(page, dayOffset = 0) {
   await page.waitForTimeout(2000);
 
   // 6. Paste ZIP Code from account settings
+  logger.info(`   Applying ZIP filter: ${zipCode}`);
   const zipFilter = page.getByRole(SEL.account.zipCodeInput.role, { name: SEL.account.zipCodeInput.name }).first();
   await zipFilter.click();
   await zipFilter.fill(zipCode);
   await zipFilter.press('Tab');
-  await page.waitForTimeout(800);
+  await page.waitForTimeout(500);
 
   // 7. Set Distance (200 miles)
   const distanceField = page.locator(SEL.dateFilter.distanceField).filter({
@@ -217,9 +220,16 @@ async function setDateFilter(page, dayOffset = 0) {
 
 async function getProjectsOnCurrentPage(page) {
   logger.info('⏳ Checking list...');
+  // Quick check for "No results found" text anywhere in the list area
+  const emptyMessage = await page.locator('text=/No results found|Nothing found/i').first().isVisible().catch(() => false);
+  if (emptyMessage) {
+    logger.info('   "No results found" detected immediately.');
+    return [];
+  }
+
   await page.waitForSelector('table tr', { timeout: 3000 }).catch(() => {});
-  
   let rows = await page.locator('table tbody tr').all();
+  logger.info(`   Found ${rows.length} raw rows.`);
   
   // Immediate re-check if empty (only 1s wait)
   if (rows.length === 0) {
