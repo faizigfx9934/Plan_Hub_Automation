@@ -134,12 +134,12 @@ async function setDateFilter(page, dayOffset = 0) {
     // Navigate to correct month/year
     for (let i = 0; i < 12; i++) {
       const period = await page.locator('button.mat-calendar-period-button').innerText().catch(() => '');
-      if (period.includes(targetMonth) && period.includes(targetYear)) break;
+      if (period.toUpperCase().includes(targetMonth.toUpperCase()) && period.includes(targetYear)) break;
       
       const nextBtn = page.locator('button.mat-calendar-next-button');
       if (await nextBtn.isVisible()) {
         await nextBtn.click();
-        await page.waitForTimeout(500);
+        await page.waitForTimeout(600);
       } else {
         break;
       }
