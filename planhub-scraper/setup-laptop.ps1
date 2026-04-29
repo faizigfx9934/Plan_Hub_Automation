@@ -117,7 +117,7 @@ if (Get-Command python -ErrorAction SilentlyContinue) {
     Write-Log "   Creating fresh virtual environment..." "Gray"
     python -m venv venv
     .\venv\Scripts\python.exe -m pip install --upgrade pip
-    .\venv\Scripts\python.exe -m pip install paddleocr paddlepaddle-gpu>=2.6.2 setuptools opencv-python google-api-python-client google-auth-httplib2 google-auth-oauthlib requests gspread oauth2client
+    .\venv\Scripts\python.exe -m pip install paddleocr paddlepaddle>=2.6.2 setuptools opencv-python google-api-python-client google-auth-httplib2 google-auth-oauthlib requests gspread oauth2client
 }
 
 Write-Log "`n========================================" "Green"
