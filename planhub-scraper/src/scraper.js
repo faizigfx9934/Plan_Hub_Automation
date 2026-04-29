@@ -74,10 +74,11 @@ function findProjectFolder(projectName) {
   }
 
   // 2. Search in OCR done dir
-  if (fs.existsSync(OCR_DONE_DIR)) {
-    const folders = fs.readdirSync(OCR_DONE_DIR);
+  const ocrPath = global.OCR_DONE_DIR || path.join(process.cwd(), '..', 'ocr-pipeline', 'done');
+  if (fs.existsSync(ocrPath)) {
+    const folders = fs.readdirSync(ocrPath);
     const match = folders.find(f => f === safeProjectName || f.startsWith(`${safeProjectName} (`));
-    if (match) return path.join(OCR_DONE_DIR, match);
+    if (match) return path.join(ocrPath, match);
   }
 
   return null;
@@ -748,8 +749,8 @@ async function main() {
         }
 
         // Always advance to next date to avoid infinite loops on stubborn projects
-        saveProgress(dayOffset);
         dayOffset++;
+        saveProgress(dayOffset);
         
         if (dayHasErrors) {
           logger.info('⚠️ Day complete with some errors. Advancing to avoid loops...');
@@ -761,8 +762,8 @@ async function main() {
         
         // Loop Breaker: Always advance even on unexpected crashes to avoid getting stuck forever
         logger.info('🔄 Force-advancing to next date to break the loop...');
-        saveProgress(dayOffset);
         dayOffset++;
+        saveProgress(dayOffset);
         await page.waitForTimeout(10000);
       }
     }
