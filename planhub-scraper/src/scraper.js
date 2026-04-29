@@ -376,14 +376,6 @@ async function scrapeProject(page, projectInfo) {
   logger.step(`Analyzing project: ${projectName}`);
   logger.setContext(projectName);
 
-  // 1. Initial Quick Check: Does folder exist and have content?
-  const existingFolder = findProjectFolder(projectName);
-  const localCount = countScreenshots(existingFolder);
-  if (localCount >= 1) {
-    logger.ok(`✅ Skipping project (Already found in ${path.basename(existingFolder)}): ${projectName} (${localCount} screenshots)`);
-    return [];
-  }
-
   const [projectPage] = await Promise.all([
     page.context().waitForEvent('page'),
     page.getByRole('table').getByText(projectName).first().click().then(async () => {
@@ -721,12 +713,13 @@ async function main() {
                 continue;
               }
 
-              // Check if project is already fully done (quick check)
+              // Check if project is already fully done (Early skip)
               const existingFolder = findProjectFolder(projectName);
               const localCount = countScreenshots(existingFolder);
               
-              if (localCount > 0) {
-                  logger.info(`   Analyzing: ${projectName} (${localCount} existing screenshots)`);
+              if (localCount >= 1) {
+                  logger.ok(`⏭️  Skipping project (Already scraped): ${projectName} (${localCount} screenshots)`);
+                  continue; // Move to next project immediately
               }
 
               try {
