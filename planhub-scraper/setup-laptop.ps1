@@ -146,24 +146,24 @@ Write-Log "`n[6/7] Finalizing Scraper Environment..." "Yellow"
 Set-Location $InstallDir
 # Check if npm is available
 if (Get-Command npm -ErrorAction SilentlyContinue) {
-    Write-Log "   Running npm install..." "Gray"
-    npm install
-    Write-Log "   Installing Playwright Browsers & Dependencies..." "Gray"
+    Write-Log "   Running npm install (Silent)..." "Gray"
+    npm install --no-audit --no-fund --loglevel error
+    Write-Log "   Installing Playwright Browsers..." "Gray"
     npx playwright install chromium --with-deps
 } else {
-    Write-Log "[WARNING] npm not found in current session. You may need to run 'npm install' manually after restart." "Yellow"
+    Write-Log "[WARNING] npm not found. Skip for now." "Yellow"
 }
 
 # --- 7. OCR DEPENDENCIES ---
-Write-Log "`n[7/7] Finalizing OCR Environment (Python venv)..." "Yellow"
+Write-Log "`n[7/7] Finalizing OCR Environment (Big Download)..." "Yellow"
 Set-Location $OcrDir
 # Check if python is available
 if (Get-Command python -ErrorAction SilentlyContinue) {
     Write-Log "   Creating virtual environment..." "Gray"
     python -m venv venv
-    Write-Log "   Installing OCR requirements (PaddleOCR, etc)..." "Gray"
-    venv\Scripts\python.exe -m pip install --upgrade pip
-    venv\Scripts\python.exe -m pip install -r requirements.txt --no-cache-dir
+    Write-Log "   Installing AI Models & Dependencies (May take 5-10 mins)..." "Gray"
+    venv\Scripts\python.exe -m pip install --upgrade pip --quiet
+    venv\Scripts\python.exe -m pip install -r requirements.txt --no-cache-dir --quiet
     Write-Log "   Verifying Google API access..." "Gray"
     venv\Scripts\python.exe -c "import google.oauth2; import gspread; print('SUCCESS')"
 } else {
