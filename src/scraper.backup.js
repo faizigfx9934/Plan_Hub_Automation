@@ -20,9 +20,6 @@ fs.mkdirSync(`${OUTPUT_DIR}`, { recursive: true });
 const SCREENSHOTS_DIR = 'screenshots';
 fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
 
-const DATA_DIR = 'data';
-fs.mkdirSync(DATA_DIR, { recursive: true });
-
 let COMPANY_ZIP_CODE = null;
 
 // State Persistence
@@ -50,7 +47,6 @@ function saveProgress(offset) {
     dayOffset: offset,
     timestamp: new Date().toISOString()
   };
-  fs.mkdirSync(path.dirname(PROGRESS_FILE), { recursive: true });
   fs.writeFileSync(PROGRESS_FILE, JSON.stringify(data, null, 2));
   logger.ok(`💾 Progress saved: dayOffset ${offset}`);
 }
