@@ -137,17 +137,19 @@ async function setDateFilter(page, dayOffset = 0) {
   // 1. Fetch ZIP from settings
   const zipCode = await getCompanyZipCode(page);
   
-  // 2. Return to project list (only if needed)
-  if (!page.url().includes('supplier.planhub.com/project/list')) {
-    await page.goto('https://supplier.planhub.com/project/list', { waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(1000);
-    await ensureLoggedIn(page);
-  }
+  // 2. Return to project list (FORCE reload for clean state between days)
+  await page.goto('https://supplier.planhub.com/project/list', { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(1000);
+  await ensureLoggedIn(page);
 
   // 3. Open Search Filters
   logger.info('   Opening search filters...');
-  await page.waitForSelector('text=/search/i', { timeout: 15000 }).catch(() => {});
-  await page.getByLabel('Search (2)').getByRole('button').filter({ hasText: /^$/ }).click();
+  const searchBtn = page.getByLabel(/Search \(\d+\)/).getByRole('button').filter({ hasText: /^$/ }).first();
+  await searchBtn.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+  await searchBtn.click().catch(async () => {
+     // Fallback: search by icon if label fails
+     await page.locator('button:has(.mat-icon:text("search"))').first().click().catch(() => {});
+  });
   await page.waitForTimeout(500);
 
   // 4. Navigate to "Custom" tab in date carousel
