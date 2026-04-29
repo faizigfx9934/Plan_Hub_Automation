@@ -132,6 +132,15 @@ function App() {
     refreshData();
   };
 
+  const sendCommand = async (laptopId, command) => {
+    if (role !== 'admin') return;
+    await fetchWithAuth(`/api/laptop/${laptopId}/command`, {
+      method: 'POST',
+      body: JSON.stringify({ command })
+    });
+    refreshData();
+  };
+
   if (!token || !role) {
     return (
       <div className="modal-overlay">
@@ -268,6 +277,44 @@ function App() {
               <div className="stat-card">
                 <div className="stat-header">
                   <div className="stat-icon"><Laptop size={20} /></div>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button 
+                      onClick={() => sendCommand(localLaptopId, 'START')}
+                      disabled={!isOnline || myLaptop?.status === 'running'}
+                      className="btn-icon"
+                      style={{ 
+                        background: 'rgba(16, 185, 129, 0.1)', 
+                        color: '#10b981',
+                        border: '1px solid rgba(16, 185, 129, 0.2)',
+                        padding: '4px',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        opacity: (!isOnline || myLaptop?.status === 'running') ? 0.3 : 1
+                      }}
+                      title="Start Scraper"
+                    >
+                      <Play size={14} fill="currentColor" />
+                    </button>
+                    <button 
+                      onClick={() => sendCommand(localLaptopId, 'STOP')}
+                      disabled={!isOnline || myLaptop?.status === 'idle'}
+                      className="btn-icon"
+                      style={{ 
+                        background: 'rgba(239, 68, 68, 0.1)', 
+                        color: '#ef4444',
+                        border: '1px solid rgba(239, 68, 68, 0.2)',
+                        padding: '4px',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        opacity: (!isOnline || myLaptop?.status === 'idle') ? 0.3 : 1
+                      }}
+                      title="Stop Scraper"
+                    >
+                      <Pause size={14} fill="currentColor" />
+                    </button>
+                  </div>
                 </div>
                 <div className="stat-value" style={{ fontSize: '18px', color: isOnline ? 'var(--success)' : 'var(--error)' }}>{myLaptop ? (isOnline ? myLaptop.status?.toUpperCase() : 'OFFLINE') : 'N/A'}</div>
                 <div className="stat-label">My Status</div>
