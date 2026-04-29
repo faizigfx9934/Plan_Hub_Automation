@@ -68,6 +68,13 @@ Write-Log "`n[3/7] Preparing Clean Workspace..." "Yellow"
 $InstallDir = "C:\planhub"
 $OcrDir = "C:\ocr-pipeline"
 
+Write-Host "WARNING: This will COMPLETELY DELETE everything in $InstallDir and $OcrDir." -ForegroundColor "Red"
+$ConfirmWipe = Read-Host "Are you sure you want to perform a FACTORY RESET on this laptop? (y/n)"
+if ($ConfirmWipe -ne "y") {
+    Write-Log "Aborting clean installation as per user request." "Yellow"
+    exit
+}
+
 # Cleanup existing
 foreach ($dir in @($InstallDir, $OcrDir)) {
     if (Test-Path $dir) {
