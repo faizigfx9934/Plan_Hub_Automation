@@ -159,7 +159,24 @@ async function setDateFilter(page, dayOffset = 0) {
   targetDate.setDate(today.getDate() + dayOffset);
   
   const clickCalendarDay = async (d) => {
+    const targetMonth = d.toLocaleString('en-US', { month: 'long' });
+    const targetYear = d.getFullYear().toString();
     const ariaLabel = d.toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+
+    // Navigate to correct month/year
+    for (let i = 0; i < 12; i++) {
+      const period = await page.locator('button.mat-calendar-period-button').innerText().catch(() => '');
+      if (period.toUpperCase().includes(targetMonth.toUpperCase()) && period.includes(targetYear)) break;
+      
+      const nextBtn = page.locator('button.mat-calendar-next-button');
+      if (await nextBtn.isVisible()) {
+        await nextBtn.click();
+        await page.waitForTimeout(600);
+      } else {
+        break;
+      }
+    }
+
     const btn = page.locator(`button[aria-label="${ariaLabel}"]`).first();
     await btn.waitFor({ state: 'attached', timeout: 10000 });
     await btn.evaluate(el => {
@@ -169,11 +186,11 @@ async function setDateFilter(page, dayOffset = 0) {
   };
   
   await clickCalendarDay(targetDate);
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(800);
   await clickCalendarDay(targetDate); // Start and End are same
-  await page.waitForTimeout(500);
-  await page.keyboard.press('Escape');
   await page.waitForTimeout(1000);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(2000);
 
   // 6. Paste ZIP Code from account settings
   const zipFilter = page.getByRole(SEL.account.zipCodeInput.role, { name: SEL.account.zipCodeInput.name }).first();
@@ -193,12 +210,27 @@ async function setDateFilter(page, dayOffset = 0) {
 }
 
 async function getProjectsOnCurrentPage(page) {
-  await page.waitForSelector('table tr', { timeout: 10000 });
+  await page.waitForSelector('table tr', { timeout: 10000 }).catch(() => {});
   const rows = await page.locator('table tbody tr').all();
   const projects = [];
   for (const row of rows) {
-    const name = await row.innerText().catch(() => '');
-    if (name.trim()) projects.push(name.trim().split('\n')[0]);
+    const rowText = await row.innerText().catch(() => '');
+    const cells = await row.locator('td').all();
+    if (!cells.length) continue;
+
+    const firstCellText = (await cells[0].innerText().catch(() => '')).trim();
+    const nameCell = cells.find((_, index) => index > 0) || cells[0];
+    const projectCellText = await nameCell.innerText().catch(() => rowText);
+    const name = projectCellText
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean)
+      .filter(line => !/^lock$/i.test(line))[0];
+    
+    if (!name) continue;
+
+    const locked = /^lock$/i.test(firstCellText) || /unlock/i.test(firstCellText);
+    projects.push({ name, locked });
   }
   return projects;
 }
@@ -302,15 +334,68 @@ async function scrapeProject(page, projectName) {
   return companyData;
 }
 
-async function paginate(page) {
-  const nextBtn = page.getByRole('button', { name: /next/i });
-  if (await nextBtn.isVisible().catch(() => false) && await nextBtn.isEnabled()) {
-    await nextBtn.click();
-    await page.waitForLoadState('domcontentloaded');
-    await page.waitForTimeout(2000);
-    return true;
+async function paginate(page, nextPageNumber) {
+  let success = false;
+
+  const pageLabel = await page.locator('text=/Page \\d+ of \\d+/').first().innerText().catch(() => '');
+  const pageMatch = pageLabel.match(/Page\s+(\d+)\s+of\s+(\d+)/i);
+  if (pageMatch) {
+    const totalPages = parseInt(pageMatch[2], 10);
+    if (nextPageNumber > totalPages) {
+      logger.info(`Project list has only ${totalPages} page(s); stopping pagination`);
+      return false;
+    }
   }
-  return false;
+
+  // Try numeric page input
+  try {
+    const goToPageInput = page.locator('input[type="number"]').first();
+    if (await goToPageInput.isVisible().catch(() => false)) {
+      await goToPageInput.click();
+      await goToPageInput.fill(String(nextPageNumber));
+      await goToPageInput.press('Enter');
+      await page.waitForTimeout(2500);
+      success = true;
+      logger.info(`Moving to project list page ${nextPageNumber}`);
+    }
+  } catch (err) {}
+
+  if (!success) {
+    try {
+      const nextBtn = page.getByRole('button', { name: /next/i });
+      if (await nextBtn.isVisible().catch(() => false) && await nextBtn.isEnabled()) {
+        await nextBtn.click();
+        await page.waitForLoadState('domcontentloaded');
+        await page.waitForTimeout(2000);
+        success = true;
+      }
+    } catch (err) {}
+  }
+
+  if (!success) {
+    try {
+      const clicked = await page.evaluate(() => {
+        const buttons = [...document.querySelectorAll('button')];
+        const nextBtn = buttons.find(b =>
+          !b.disabled && (
+            /next/i.test((b.getAttribute('aria-label') || '')) ||
+            /next/i.test((b.textContent || '')) ||
+            (b.textContent || '').includes('arrow_forward_ios')
+          )
+        );
+        if (!nextBtn) return false;
+        nextBtn.scrollIntoView({ block: 'center', inline: 'center' });
+        nextBtn.click();
+        return true;
+      });
+      if (clicked) {
+        await page.waitForTimeout(2500);
+        success = true;
+      }
+    } catch (err) {}
+  }
+
+  return success;
 }
 
 async function main() {
@@ -371,7 +456,15 @@ async function main() {
         logger.step(`📄 Project List Page ${pageNum}`);
         const projects = await getProjectsOnCurrentPage(page);
         
-        for (const projectName of projects) {
+        for (const projectInfo of projects) {
+          const projectName = typeof projectInfo === 'string' ? projectInfo : projectInfo.name;
+          const isLocked = typeof projectInfo === 'object' && !!projectInfo.locked;
+
+          if (isLocked) {
+            logger.info(`Skipping locked project: ${projectName}`);
+            continue;
+          }
+
           try {
             const data = await scrapeProject(page, projectName);
             allData.push(...data);
@@ -383,7 +476,7 @@ async function main() {
           }
         }
         pageNum++;
-      } while (await paginate(page));
+      } while (await paginate(page, pageNum));
 
       // Successfully finished a full day's work
       saveProgress(dayOffset);
