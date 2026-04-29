@@ -364,9 +364,14 @@ async function main() {
     await telemetry.reportRunComplete({ companiesScraped: allData.length, quarantined: quarantine.length });
 
   } catch (err) {
-    logger.fail(`Fatal: ${err.message}`);
-    telemetry.setStatus('error');
+    logger.fail(`Fatal Error: ${err.message}`);
+    if (telemetry.isEnabled()) {
+      await telemetry.reportError(err.message);
+    }
   } finally {
+    if (telemetry.isEnabled()) {
+      await telemetry.reportStopping();
+    }
     stopHeartbeat();
     await browser.close().catch(() => {});
   }

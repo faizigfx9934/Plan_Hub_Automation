@@ -79,7 +79,7 @@ export function startHeartbeat({ intervalMs = Number(process.env.HEARTBEAT_INTER
       laptop_id: LAPTOP_ID,
       status: state.currentStatus,
       state: process.env.STATE || 'CA',
-      current_project: logger.getContext() || 'Idle',
+      current_project: logger.getContext?.() || 'Idle',
     });
     await uploadLogBatch();
     timer = setTimeout(tick, intervalMs);
@@ -112,4 +112,13 @@ export async function reportRunComplete(summary) {
 
 export function isPaused() {
   return state.remoteConfig.paused === 'true';
+}
+
+export async function reportError(msg) {
+  setStatus('error');
+  await post('/api/heartbeat', {
+    laptop_id: LAPTOP_ID,
+    status: 'error',
+    current_project: `ERROR: ${msg.slice(0, 50)}`,
+  }, { timeoutMs: 2000, retries: 1 });
 }
