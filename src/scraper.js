@@ -20,19 +20,17 @@ fs.mkdirSync(`${OUTPUT_DIR}`, { recursive: true });
 const SCREENSHOTS_DIR = 'screenshots';
 fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
 
+let COMPANY_ZIP_CODE = null;
+
 // State Persistence
 function loadProgress() {
   if (fs.existsSync(PROGRESS_FILE)) {
     try {
       const data = JSON.parse(fs.readFileSync(PROGRESS_FILE, 'utf8'));
       if (data.dayOffset !== undefined) {
-        // Calculate if we need to resume from a past date
         const savedDate = new Date(data.timestamp);
         const today = new Date();
         const diffDays = Math.floor((today - savedDate) / (1000 * 60 * 60 * 24));
-        
-        // If we saved offset 4 yesterday, and today is 1 day later, 
-        // we should now be at offset 3 relative to today to hit the same target date.
         const resumeOffset = data.dayOffset - diffDays;
         logger.info(`📈 Resuming from progress.json (Saved Offset: ${data.dayOffset}, Adjusted: ${resumeOffset})`);
         return resumeOffset;
@@ -101,106 +99,97 @@ async function ensureLoggedIn(page, returnUrl = 'https://supplier.planhub.com/pr
   return true;
 }
 
-async function setupCompanyProfile(page) {
-  logger.step('Setting up Company Profile (Zip Code)');
-  await page.goto('https://supplier.planhub.com/settings/company', { timeout: 60000, waitUntil: 'domcontentloaded' });
-  await ensureLoggedIn(page, 'https://supplier.planhub.com/settings/company');
+async function getCompanyZipCode(page) {
+  if (COMPANY_ZIP_CODE) return COMPANY_ZIP_CODE;
   
-  const zip = process.env.PLANHUB_ZIP;
-  if (!zip) {
-    logger.info('No PLANHUB_ZIP found in .env, skipping profile update.');
-    return;
-  }
-  
-  logger.info(`Updating region to ZIP: ${zip}`);
-
-  // Using the workflow you provided
-  try {
-    const zipContainer = page.locator('div').filter({ hasText: /^Zip Code \*$/ }).nth(1);
-    await zipContainer.waitFor({ state: 'visible', timeout: 10000 });
-    await zipContainer.click();
-    
-    const zipInput = page.getByRole('searchbox', { name: 'Zip Code' });
-    await zipInput.click();
-    await zipInput.fill(zip);
-  } catch (err) {
-    logger.info('Primary zip selector failed, trying fallback...');
-    // Fallback to qa-locator seen in inspector
-    await page.locator('[qa-locator="input-zip-code"]').fill(zip);
-  }
-  
-  // Save Changes
-  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-  const saveBtn = page.getByRole('button', { name: /save|update/i }).first();
-  await saveBtn.click();
-  await page.waitForTimeout(3000);
-  logger.ok(`Company profile updated with Zip: ${zip}`);
-
-  // Return to projects list
+  logger.step('Fetching company ZIP code from account settings');
   await page.goto('https://supplier.planhub.com/project/list', { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(2000);
+  await ensureLoggedIn(page);
+
+  await page.getByRole(SEL.account.profileImage.role, { name: SEL.account.profileImage.name }).click();
+  await page.waitForTimeout(800);
+  await page.getByRole(SEL.account.myAccount.role, { name: SEL.account.myAccount.name }).click();
+  await page.waitForTimeout(1500);
+  await page.getByRole(SEL.account.companySettingsButton.role, { name: SEL.account.companySettingsButton.name }).click();
+  await page.waitForTimeout(1000);
+  await page.getByRole(SEL.account.viewCompanySettingsLink.role, { name: SEL.account.viewCompanySettingsLink.name }).click();
+  await page.waitForTimeout(2500);
+
+  const zipInput = page.getByRole(SEL.account.zipCodeInput.role, { name: SEL.account.zipCodeInput.name }).first();
+  await zipInput.waitFor({ state: 'visible', timeout: 15000 });
+  const zipCode = (await zipInput.inputValue().catch(() => '')).trim();
+  if (!zipCode) {
+    throw new Error('Could not read company ZIP code from Company Settings');
+  }
+
+  COMPANY_ZIP_CODE = zipCode;
+  logger.ok(`Company ZIP detected: ${COMPANY_ZIP_CODE}`);
+  return COMPANY_ZIP_CODE;
 }
 
 async function setDateFilter(page, dayOffset = 0) {
-  logger.step(`Setting date filter: today+${dayOffset}`);
-  await page.goto('https://supplier.planhub.com/project/list', { timeout: 60000, waitUntil: 'domcontentloaded' });
+  logger.step(`Setting date and ZIP filters: today+${dayOffset}`);
+  
+  // 1. Fetch ZIP from settings
+  const zipCode = await getCompanyZipCode(page);
+  
+  // 2. Return to project list
+  await page.goto('https://supplier.planhub.com/project/list', { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(2000);
   await ensureLoggedIn(page);
 
+  // 3. Open Search Filters
   await page.waitForSelector('text=/search/i', { timeout: 30000 });
   await page.getByLabel('Search (2)').getByRole('button').filter({ hasText: /^$/ }).click();
   await page.waitForTimeout(1000);
 
+  // 4. Navigate to "Custom" tab in date carousel
   for (let i = 0; i < 8; i++) {
     const customTab = page.getByText('Custom', { exact: true });
     if (await customTab.isVisible().catch(() => false)) break;
     await page.locator(SEL.dateFilter.paginateArrow).click().catch(() => {});
     await page.waitForTimeout(300);
   }
-
   await page.getByText('Custom').click();
   await page.waitForTimeout(1500);
 
+  // 5. Set Date (today + dayOffset)
   const today = new Date();
-  const startDate = new Date(today);
-  startDate.setDate(today.getDate() + dayOffset);
-  const endDate = new Date(startDate);
-
+  const targetDate = new Date(today);
+  targetDate.setDate(today.getDate() + dayOffset);
+  
   const clickCalendarDay = async (d) => {
-    const targetMonth = d.toLocaleString('en-US', { month: 'long' });
-    const targetYear = d.getFullYear().toString();
     const ariaLabel = d.toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-
-    // Navigate to correct month/year
-    for (let i = 0; i < 12; i++) {
-      const period = await page.locator('button.mat-calendar-period-button').innerText().catch(() => '');
-      if (period.toUpperCase().includes(targetMonth.toUpperCase()) && period.includes(targetYear)) break;
-      
-      const nextBtn = page.locator('button.mat-calendar-next-button');
-      if (await nextBtn.isVisible()) {
-        await nextBtn.click();
-        await page.waitForTimeout(600);
-      } else {
-        break;
-      }
-    }
-
     const btn = page.locator(`button[aria-label="${ariaLabel}"]`).first();
-    await btn.waitFor({ state: 'attached', timeout: 5000 });
+    await btn.waitFor({ state: 'attached', timeout: 10000 });
     await btn.evaluate(el => {
       el.scrollIntoView({ block: 'center', inline: 'center' });
       el.click();
     });
   };
-
-  await clickCalendarDay(startDate);
-  await page.waitForTimeout(800);
-  await clickCalendarDay(endDate);
+  
+  await clickCalendarDay(targetDate);
+  await page.waitForTimeout(500);
+  await clickCalendarDay(targetDate); // Start and End are same
+  await page.waitForTimeout(500);
+  await page.keyboard.press('Escape');
   await page.waitForTimeout(1000);
 
-  await page.keyboard.press('Escape');
-  await page.waitForTimeout(2000);
-  logger.ok(`Filter set to single day window (Offset: ${dayOffset})`);
+  // 6. Paste ZIP Code from account settings
+  const zipFilter = page.getByRole(SEL.account.zipCodeInput.role, { name: SEL.account.zipCodeInput.name }).first();
+  await zipFilter.click();
+  await zipFilter.fill(zipCode);
+  await zipFilter.press('Tab');
+  await page.waitForTimeout(800);
+
+  // 7. Set Distance (200 miles)
+  const distanceField = page.locator(SEL.dateFilter.distanceField).filter({
+    has: page.locator('mat-label').filter({ hasText: /^Distance$/ }),
+  }).first();
+  await distanceField.locator(SEL.dateFilter.distanceTrigger).click();
+  await page.locator(SEL.dateFilter.distanceOption).filter({ hasText: /^\s*200(\s*miles)?\s*$/i }).first().click();
+  
+  logger.ok(`Filter set: ${targetDate.toLocaleDateString()} | ZIP ${zipCode} | 200 miles`);
 }
 
 async function getProjectsOnCurrentPage(page) {
@@ -234,38 +223,7 @@ async function scrapeProject(page, projectName) {
     return [];
   }
 
-  let fullProjectName = projectName;
-  let bidDueDate = '';
-  try {
-    const headerText = await projectPage.locator('body').innerText();
-    const nameMatch = headerText.match(/Project Name:\s*([^\n]+)/i);
-    if (nameMatch) fullProjectName = nameMatch[1].trim();
-    const dateMatch = headerText.match(/Bid Due Date\s*([0-9]{1,2}[\/\-][0-9]{1,2}[\/\-][0-9]{2,4})/i);
-    if (dateMatch) bidDueDate = dateMatch[1].replace(/\//g, '-');
-  } catch (err) {}
-
-  const safeProjectName = fullProjectName.replace(/[<>:"/\\|?*\x00-\x1F]/g, '').trim().slice(0, 100);
-  
-  // Smart Folder Matching: Check if we already have a folder for this project 
-  // (matches either exact name or name with date in parentheses)
-  let projectFolderName = bidDueDate ? `${safeProjectName} (${bidDueDate})` : safeProjectName;
-  const existingFolders = fs.readdirSync(SCREENSHOTS_DIR);
-  const matchedFolder = existingFolders.find(f => f === safeProjectName || f.startsWith(`${safeProjectName} (`));
-  
-  if (matchedFolder) {
-    projectFolderName = matchedFolder;
-    // Optimization: If we found a date this time but the old folder didn't have one, rename it!
-    if (bidDueDate && matchedFolder === safeProjectName) {
-      const newName = `${safeProjectName} (${bidDueDate})`;
-      try {
-        fs.renameSync(path.join(SCREENSHOTS_DIR, matchedFolder), path.join(SCREENSHOTS_DIR, newName));
-        projectFolderName = newName;
-        logger.info(`📝 Updated project folder name with bid date: ${newName}`);
-      } catch (e) {}
-    }
-  }
-
-  const projectScreenshotsDir = path.join(SCREENSHOTS_DIR, projectFolderName);
+  const projectScreenshotsDir = path.join(SCREENSHOTS_DIR, projectName.replace(/[^a-z0-9]/gi, '_'));
   fs.mkdirSync(projectScreenshotsDir, { recursive: true });
 
   await projectPage.getByRole('button', { name: 'Subcontractors' }).click();
@@ -325,6 +283,7 @@ async function scrapeProject(page, projectName) {
         PREVIOUS_SCRAPES.add(dedupKey);
         await companyPage.close();
         logger.ok(`✓ ${companyName}`);
+        telemetry.reportCompanies([record]);
       } catch (err) {
         logger.fail(`Failed ${companyName}: ${err.message}`);
       }
@@ -402,14 +361,11 @@ async function main() {
 
     // Main Work Loop
     while (RUN_FOREVER || (Date.now() - START_TIME < MAX_RUNTIME_MS)) {
-      // 1. Select the Date Filter
+      // 1. Select the Date Filter (now includes ZIP fetching and pasting)
       logger.step(`📅 Date Target: today+${dayOffset}`);
       await setDateFilter(page, dayOffset);
       
-      // 2. Update Company Profile Zip (from ENV)
-      await setupCompanyProfile(page);
-      
-      // 3. Do the rest (Scrape Projects)
+      // 2. Scrape Projects
       let pageNum = 1;
       do {
         logger.step(`📄 Project List Page ${pageNum}`);
