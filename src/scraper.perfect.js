@@ -213,16 +213,7 @@ async function getProjectsOnCurrentPage(page) {
   logger.info('⏳ Waiting for project list to stabilize...');
   await page.waitForSelector('table tr', { timeout: 15000 }).catch(() => {});
   await page.waitForTimeout(5000); // Added more weight to load the project section
-  
-  let rows = await page.locator('table tbody tr').all();
-  
-  // Tweak: If no projects found, wait another 5s and try one last time (PlanHub lag protection)
-  if (rows.length === 0) {
-    logger.info('   Empty list detected. Giving PlanHub 5 more seconds to load...');
-    await page.waitForTimeout(5000);
-    rows = await page.locator('table tbody tr').all();
-  }
-
+  const rows = await page.locator('table tbody tr').all();
   const projects = [];
   for (const row of rows) {
     const rowText = await row.innerText().catch(() => '');
@@ -538,7 +529,7 @@ async function main() {
           const projects = await getProjectsOnCurrentPage(page);
           
           if (projects.length === 0) {
-            logger.info(`ℹ️  No projects found on page ${pageNum}. Checking for subpages...`);
+            logger.info('No projects found on this page.');
           }
 
           for (const projectInfo of projects) {
