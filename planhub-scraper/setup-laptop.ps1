@@ -31,6 +31,8 @@ $PhEmail = Read-Host "2. Enter PlanHub Email"
 $PhPass = Read-Host "3. Enter PlanHub Password"
 $State = Read-Host "4. Enter State Code (e.g. TX, CA)"
 $Zip = Read-Host "5. Enter Office Zip Code (e.g. 76180)"
+$ScrPath = Read-Host "6. Enter Screenshot Root Path (Default: C:\planhub\screenshots)"
+if ([string]::IsNullOrWhiteSpace($ScrPath)) { $ScrPath = "C:\planhub\screenshots" }
 
 if ([string]::IsNullOrWhiteSpace($LaptopID) -or [string]::IsNullOrWhiteSpace($PhEmail)) {
     Write-Log "[ERROR] Laptop ID and Email are mandatory." "Red"
@@ -125,7 +127,7 @@ $OcrConfig = @"
 SHEET_ID = "1mec31wKtllJOS5XdfphXoHO2qV2TC-d9PEQRBPcMdZc"
 MACHINE_NAME = "$LaptopID"
 CREDENTIALS_FILE = "credentials.json"
-SCREENSHOTS_ROOT = r"C:\planhub\screenshots"
+SCREENSHOTS_ROOT = r"$ScrPath"
 DISCORD_WEBHOOK_URLS = [
     "https://discord.com/api/webhooks/1496914813735927950/gTWQFxHkWuABBkRu0vbpWJq2FWdhjH8n3JloB9AhmpO-RUhE91EOrdjp8kPkRAh4IHS2",
 ]
