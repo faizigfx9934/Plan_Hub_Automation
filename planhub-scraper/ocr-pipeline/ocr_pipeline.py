@@ -698,7 +698,6 @@ def init_ocr_worker():
         use_angle_cls=True,
         lang="en",
         use_gpu=False,
-        det_db_score_mode="slow",
     )
 
 
