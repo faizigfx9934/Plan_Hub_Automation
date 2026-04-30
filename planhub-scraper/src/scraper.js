@@ -181,7 +181,18 @@ let PREVIOUS_SCRAPES = loadPreviousData();
 
 async function login(page) {
   logger.step('Login');
-  await page.goto('https://access.planhub.com/signin');
+  let retries = 3;
+  while (retries > 0) {
+    try {
+      await page.goto('https://access.planhub.com/signin', { waitUntil: 'load', timeout: 30000 });
+      break;
+    } catch (err) {
+      retries--;
+      if (retries === 0) throw err;
+      logger.warning(`Navigation failed (${err.message}). Retrying in 5 seconds...`);
+      await page.waitForTimeout(5000);
+    }
+  }
   await page.getByRole('textbox', { name: 'Email' }).fill(process.env.PLANHUB_EMAIL);
   await page.getByRole('textbox', { name: 'Password' }).fill(process.env.PLANHUB_PASSWORD);
   await page.getByRole('button', { name: 'Sign In' }).click();
