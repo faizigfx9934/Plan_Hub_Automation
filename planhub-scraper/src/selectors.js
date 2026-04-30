@@ -11,7 +11,7 @@ export const SEL = {
     myAccount: { role: 'menuitem', name: 'My Account' },
     companySettingsButton: { role: 'button', name: 'Company Settings' },
     viewCompanySettingsLink: { role: 'link', name: 'View Company Settings' },
-    zipCodeInput: { role: 'searchbox', name: 'Zip Code' },
+    zipCodeInput: { role: 'textbox', name: /Zip/i },
   },
   dateFilter: {
     paginateArrow: '.mat-ripple.mat-tab-header-pagination.mat-tab-header-pagination-after',
