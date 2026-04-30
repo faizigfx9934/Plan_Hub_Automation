@@ -4,6 +4,7 @@ export const logger = {
   ok: (msg) => console.log(`✅ ${msg}`),
   fail: (msg) => console.log(`❌ ${msg}`),
   info: (msg) => console.log(`ℹ️  ${msg}`),
+  warning: (msg) => console.log(`⚠️  ${msg}`),
   step: (msg) => {
     currentContext = msg;
     console.log(`\n━━━ ${msg} ━━━`);
